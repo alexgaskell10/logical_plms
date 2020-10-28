@@ -91,7 +91,7 @@ class DataProcessor(object):
             return lines
 
 
-class DisjunctionProcessor(DataProcessor):
+class AGProcessor(DataProcessor):
     """Processor for AG sythetic disjunction dataset. """
 
     def get_train_examples(self, data_dir):
@@ -749,10 +749,179 @@ def compute_metrics(task_name, preds, labels):
         return {"acc": simple_accuracy(preds, labels)}
     elif task_name == "polarity":
         return {"acc": simple_accuracy(preds, labels)}
-    elif task_name == "disjunction":
+    elif task_name == "ag_tasks":
         return {"acc": simple_accuracy(preds, labels)}
     else:
         raise KeyError(task_name)
+
+def run_eval(args, task_name, processor, label_list, tokenizer, output_mode, model, device, num_labels, global_step, tr_loss, nb_tr_steps):
+    ########################
+    # MAIN EVALUATION LOOP #
+    ########################
+
+    if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
+
+        #############################
+        # ### SPECIAL CASE FOR SICK #
+        #############################
+        if task_name == "sick":
+            orig = args.sick_orig
+            if args.sick_mod: orig = False
+            eval_examples = processor.get_dev_examples(args.data_dir, orig=orig, with_arrows=args.with_arrows)
+        else:
+            eval_examples = processor.get_dev_examples(args.data_dir)
+
+        eval_features = convert_examples_to_features(
+            eval_examples, label_list, args.max_seq_length, tokenizer, output_mode)
+        logger.info("***** Running evaluation *****")
+        logger.info("  Num examples = %d", len(eval_examples))
+        logger.info("  Batch size = %d", args.eval_batch_size)
+        all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
+        all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
+        all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
+
+        if output_mode == "classification":
+            all_label_ids = torch.tensor([f.label_id for f in eval_features], dtype=torch.long)
+        elif output_mode == "regression":
+            all_label_ids = torch.tensor([f.label_id for f in eval_features], dtype=torch.float)
+
+        eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+        # Run prediction for full data
+        eval_sampler = SequentialSampler(eval_data)
+        eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
+
+        model.eval()
+        eval_loss = 0
+        nb_eval_steps = 0
+        preds = []
+
+        for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader, desc="Evaluating"):
+            input_ids = input_ids.to(device)
+            input_mask = input_mask.to(device)
+            segment_ids = segment_ids.to(device)
+            label_ids = label_ids.to(device)
+
+            with torch.no_grad():
+                logits = model(input_ids, segment_ids, input_mask, labels=None)
+
+            # create eval loss and other metric required by the task
+            if output_mode == "classification":
+                loss_fct = CrossEntropyLoss()
+                tmp_eval_loss = loss_fct(logits.view(-1, num_labels), label_ids.view(-1))
+            elif output_mode == "regression":
+                loss_fct = MSELoss()
+                tmp_eval_loss = loss_fct(logits.view(-1), label_ids.view(-1))
+            
+            eval_loss += tmp_eval_loss.mean().item()
+            nb_eval_steps += 1
+            if len(preds) == 0:
+                preds.append(logits.detach().cpu().numpy())
+            else:
+                preds[0] = np.append(
+                    preds[0], logits.detach().cpu().numpy(), axis=0)
+
+        eval_loss = eval_loss / nb_eval_steps
+        preds = preds[0]
+        if task_name == 'disjunction' and num_labels == 3:
+            preds[:, 1] = -1e10    # Set logits for NEUTRAL to large negative so they never are argmax
+        if output_mode == "classification":
+            preds = np.argmax(preds, axis=1)
+        elif output_mode == "regression":
+            preds = np.squeeze(preds)
+        result = compute_metrics(task_name, preds, all_label_ids.numpy())     # TODO
+        analyse_results(preds, all_label_ids.numpy())
+        loss = tr_loss/nb_tr_steps if args.do_train else None
+
+        result['eval_loss'] = eval_loss
+        result['global_step'] = global_step
+        result['loss'] = loss
+        
+        if args.logger == 'wandb':
+            wandb.log(result)
+
+        output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
+        with open(output_eval_file, "w") as writer:
+            logger.info("***** Eval results *****")
+            for key in sorted(result.keys()):
+                logger.info("  %s = %s", key, str(result[key]))
+                writer.write("%s = %s\n" % (key, str(result[key])))
+
+        # hack for MNLI-MM
+        if task_name == "mnli":
+            task_name = "mnli-mm"
+            processor = processors[task_name]()
+
+            if os.path.exists(args.output_dir + '-MM') and os.listdir(args.output_dir + '-MM') and args.do_train:
+                raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
+            if not os.path.exists(args.output_dir + '-MM'):
+                os.makedirs(args.output_dir + '-MM')
+
+            eval_examples = processor.get_dev_examples(args.data_dir)
+            eval_features = convert_examples_to_features(
+                eval_examples, label_list, args.max_seq_length, tokenizer, output_mode)
+            logger.info("***** Running evaluation *****")
+            logger.info("  Num examples = %d", len(eval_examples))
+            logger.info("  Batch size = %d", args.eval_batch_size)
+            all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
+            all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
+            all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
+            all_label_ids = torch.tensor([f.label_id for f in eval_features], dtype=torch.long)
+
+            eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+            # Run prediction for full data
+            eval_sampler = SequentialSampler(eval_data)
+            eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
+
+            model.eval()
+            eval_loss = 0
+            nb_eval_steps = 0
+            preds = []
+
+            for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader, desc="Evaluating"):
+                input_ids = input_ids.to(device)
+                input_mask = input_mask.to(device)
+                segment_ids = segment_ids.to(device)
+                label_ids = label_ids.to(device)
+
+                with torch.no_grad():
+                    logits = model(input_ids, segment_ids, input_mask, labels=None)
+            
+                loss_fct = CrossEntropyLoss()
+                tmp_eval_loss = loss_fct(logits.view(-1, num_labels), label_ids.view(-1))
+            
+                eval_loss += tmp_eval_loss.mean().item()
+                nb_eval_steps += 1
+                if len(preds) == 0:
+                    preds.append(logits.detach().cpu().numpy())
+                else:
+                    preds[0] = np.append(
+                        preds[0], logits.detach().cpu().numpy(), axis=0)
+
+            eval_loss = eval_loss / nb_eval_steps
+            preds = preds[0]
+            preds = np.argmax(preds, axis=1)
+            result = compute_metrics(task_name, preds, all_label_ids.numpy())
+            loss = tr_loss/nb_tr_steps if args.do_train else None
+
+            result['eval_loss'] = eval_loss
+            result['global_step'] = global_step
+            result['loss'] = loss
+
+            output_eval_file = os.path.join(args.output_dir + '-MM', "eval_results.txt")
+            with open(output_eval_file, "w") as writer:
+                logger.info("***** Eval results *****")
+                for key in sorted(result.keys()):
+                    logger.info("  %s = %s", key, str(result[key]))
+                    writer.write("%s = %s\n" % (key, str(result[key])))
+
+def analyse_results(preds, labels):
+    correct = preds == labels
+    correct = correct[:len(correct) - len(correct)%8]
+    correct_dct = {n:[0,0] for n in range(8)}
+    for n, val in enumerate(correct):
+        correct_dct[n%8][int(val)] += 1
+
+    print('\n',correct_dct,'\n')
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -919,7 +1088,7 @@ def main():
 
     ## check that you are not overriding
     # if os.path.isdir(args.output_dir):
-    #     exit('PATH=%s ALREADY EXISTS, exiting...' % args.output_dir)
+    #     exit('PATH=%s ALREADY5 EXISTS, exiting...' % args.output_dir)
 
     if args.server_ip and args.server_port:
         # Distant debugging - see https://code.visualstudio.com/docs/python/debugging#_attach-to-a-local-script
@@ -946,7 +1115,7 @@ def main():
         "sick" : SICKProcessor,
         "polarity" : PolarityProcessor,
         ### AG ###
-        "disjunction": DisjunctionProcessor,
+        "ag_tasks": AGProcessor,
     }
 
     output_modes = {
@@ -962,7 +1131,7 @@ def main():
         "sick"   : "classification",
         "polarity" : "classification",
         ### AG ###
-        "disjunction": "classification",
+        "ag_tasks": "classification",
     }
 
     ########################
@@ -1043,7 +1212,8 @@ def main():
         if task_name == "sick":
             ## use the original data?
             orig = args.sick_orig
-            if args.sick_mod: orig = False
+            if args.sick_mod: 
+                orig = False
             ## make sure that arrows is only set on modified data
             train_examples = processor.get_train_examples(args.sick_data,orig=orig,with_arrows=args.with_arrows)
 
@@ -1258,175 +1428,6 @@ def main():
         os.remove(output_model_file)
 
     run_eval(args, task_name, processor, label_list, tokenizer, output_mode, model, device, num_labels, global_step, tr_loss, nb_tr_steps)
-
-def run_eval(args, task_name, processor, label_list, tokenizer, output_mode, model, device, num_labels, global_step, tr_loss, nb_tr_steps):
-    ########################
-    # MAIN EVALUATION LOOP #
-    ########################
-
-    if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-
-        #############################
-        # ### SPECIAL CASE FOR SICK #
-        #############################
-        if task_name == "sick":
-            orig = args.sick_orig
-            if args.sick_mod: orig = False
-            eval_examples = processor.get_dev_examples(args.data_dir, orig=orig, with_arrows=args.with_arrows)
-        else:
-            eval_examples = processor.get_dev_examples(args.data_dir)
-
-        eval_features = convert_examples_to_features(
-            eval_examples, label_list, args.max_seq_length, tokenizer, output_mode)
-        logger.info("***** Running evaluation *****")
-        logger.info("  Num examples = %d", len(eval_examples))
-        logger.info("  Batch size = %d", args.eval_batch_size)
-        all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
-        all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
-        all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
-
-        if output_mode == "classification":
-            all_label_ids = torch.tensor([f.label_id for f in eval_features], dtype=torch.long)
-        elif output_mode == "regression":
-            all_label_ids = torch.tensor([f.label_id for f in eval_features], dtype=torch.float)
-
-        eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
-        # Run prediction for full data
-        eval_sampler = SequentialSampler(eval_data)
-        eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
-
-        model.eval()
-        eval_loss = 0
-        nb_eval_steps = 0
-        preds = []
-
-        for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader, desc="Evaluating"):
-            input_ids = input_ids.to(device)
-            input_mask = input_mask.to(device)
-            segment_ids = segment_ids.to(device)
-            label_ids = label_ids.to(device)
-
-            with torch.no_grad():
-                logits = model(input_ids, segment_ids, input_mask, labels=None)
-
-            # create eval loss and other metric required by the task
-            if output_mode == "classification":
-                loss_fct = CrossEntropyLoss()
-                tmp_eval_loss = loss_fct(logits.view(-1, num_labels), label_ids.view(-1))
-            elif output_mode == "regression":
-                loss_fct = MSELoss()
-                tmp_eval_loss = loss_fct(logits.view(-1), label_ids.view(-1))
-            
-            eval_loss += tmp_eval_loss.mean().item()
-            nb_eval_steps += 1
-            if len(preds) == 0:
-                preds.append(logits.detach().cpu().numpy())
-            else:
-                preds[0] = np.append(
-                    preds[0], logits.detach().cpu().numpy(), axis=0)
-
-        eval_loss = eval_loss / nb_eval_steps
-        preds = preds[0]
-        if task_name == 'disjunction' and num_labels == 3:
-            preds[:, 1] = -1e10    # Set logits for NEUTRAL to large negative so they never are argmax
-        if output_mode == "classification":
-            preds = np.argmax(preds, axis=1)
-        elif output_mode == "regression":
-            preds = np.squeeze(preds)
-        result = compute_metrics(task_name, preds, all_label_ids.numpy())     # TODO
-        analyse_results(preds, all_label_ids.numpy())
-        loss = tr_loss/nb_tr_steps if args.do_train else None
-
-        result['eval_loss'] = eval_loss
-        result['global_step'] = global_step
-        result['loss'] = loss
-        
-        if args.logger == 'wandb':
-            wandb.log(result)
-
-        output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
-        with open(output_eval_file, "w") as writer:
-            logger.info("***** Eval results *****")
-            for key in sorted(result.keys()):
-                logger.info("  %s = %s", key, str(result[key]))
-                writer.write("%s = %s\n" % (key, str(result[key])))
-
-        # hack for MNLI-MM
-        if task_name == "mnli":
-            task_name = "mnli-mm"
-            processor = processors[task_name]()
-
-            if os.path.exists(args.output_dir + '-MM') and os.listdir(args.output_dir + '-MM') and args.do_train:
-                raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
-            if not os.path.exists(args.output_dir + '-MM'):
-                os.makedirs(args.output_dir + '-MM')
-
-            eval_examples = processor.get_dev_examples(args.data_dir)
-            eval_features = convert_examples_to_features(
-                eval_examples, label_list, args.max_seq_length, tokenizer, output_mode)
-            logger.info("***** Running evaluation *****")
-            logger.info("  Num examples = %d", len(eval_examples))
-            logger.info("  Batch size = %d", args.eval_batch_size)
-            all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
-            all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
-            all_segment_ids = torch.tensor([f.segment_ids for f in eval_features], dtype=torch.long)
-            all_label_ids = torch.tensor([f.label_id for f in eval_features], dtype=torch.long)
-
-            eval_data = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
-            # Run prediction for full data
-            eval_sampler = SequentialSampler(eval_data)
-            eval_dataloader = DataLoader(eval_data, sampler=eval_sampler, batch_size=args.eval_batch_size)
-
-            model.eval()
-            eval_loss = 0
-            nb_eval_steps = 0
-            preds = []
-
-            for input_ids, input_mask, segment_ids, label_ids in tqdm(eval_dataloader, desc="Evaluating"):
-                input_ids = input_ids.to(device)
-                input_mask = input_mask.to(device)
-                segment_ids = segment_ids.to(device)
-                label_ids = label_ids.to(device)
-
-                with torch.no_grad():
-                    logits = model(input_ids, segment_ids, input_mask, labels=None)
-            
-                loss_fct = CrossEntropyLoss()
-                tmp_eval_loss = loss_fct(logits.view(-1, num_labels), label_ids.view(-1))
-            
-                eval_loss += tmp_eval_loss.mean().item()
-                nb_eval_steps += 1
-                if len(preds) == 0:
-                    preds.append(logits.detach().cpu().numpy())
-                else:
-                    preds[0] = np.append(
-                        preds[0], logits.detach().cpu().numpy(), axis=0)
-
-            eval_loss = eval_loss / nb_eval_steps
-            preds = preds[0]
-            preds = np.argmax(preds, axis=1)
-            result = compute_metrics(task_name, preds, all_label_ids.numpy())
-            loss = tr_loss/nb_tr_steps if args.do_train else None
-
-            result['eval_loss'] = eval_loss
-            result['global_step'] = global_step
-            result['loss'] = loss
-
-            output_eval_file = os.path.join(args.output_dir + '-MM', "eval_results.txt")
-            with open(output_eval_file, "w") as writer:
-                logger.info("***** Eval results *****")
-                for key in sorted(result.keys()):
-                    logger.info("  %s = %s", key, str(result[key]))
-                    writer.write("%s = %s\n" % (key, str(result[key])))
-
-def analyse_results(preds, labels):
-    correct = preds == labels
-    correct = correct[:len(correct) - len(correct)%8]
-    correct_dct = {n:[0,0] for n in range(8)}
-    for n, val in enumerate(correct):
-        correct_dct[n%8][int(val)] += 1
-
-    print('\n',correct_dct,'\n')
 
 
 if __name__ == "__main__":

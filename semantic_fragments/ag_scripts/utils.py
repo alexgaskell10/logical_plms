@@ -2,6 +2,8 @@ import argparse
 import json
 import glob
 import os
+import sys
+from random import shuffle, choice
 
 def dump_args(args: argparse.Namespace):
     with open('./ag_scripts/args/set_1.txt', 'w') as f:
@@ -41,6 +43,27 @@ def parse_names_and_locs():
     with open('/vol/bitbucket/aeg19/semantic_fragments/ag_scripts/args/names_locations.txt', 'w') as f:
         output = {'names': list(all_names), 'locations': list(all_locations)}
         json.dump(output, f, indent=2)
+
+class TemplateUtils:
+    DISTRACTOR_TEMPLATES = {
+        'vanilla1': lambda p1, p2, l1, l2, v1, v2: f" {p1} {v1} {l1}.",
+        'neg1': lambda p1, p2, l1, l2, v1, v2: f" {p1} {v2} {l1}.",
+        'disj1': lambda p1, p2, l1, l2, v1, v2: f" {p1} or {p2} {v1} {l1}.",
+        'disj2': lambda p1, p2, l1, l2, v1, v2: f" {p1} {v1} {l1} or {l2}.",
+        'neg_disj1': lambda p1, p2, l1, l2, v1, v2: f" {p1} or {p1} {v2} {l1}.",
+        'neg_disj2': lambda p1, p2, l1, l2, v1, v2: f" {p1} {v2} {l1} or {l2}.",
+    }
+
+    @classmethod
+    def shuffle_sentence(self, sentence: str):
+        ''' Split an input sentence into sub-rules
+            (seperated by '.'), shuffle their order
+            and return the new sentence.
+        '''
+        sentences = [s.strip() for s in sentence.split('.') if s]
+        shuffle(sentences)
+        return '. '.join(sentences) + '.'
+
 
 if __name__ == '__main__':
     # parse_names_and_locs()

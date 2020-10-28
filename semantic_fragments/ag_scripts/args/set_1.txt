@@ -1,7 +1,7 @@
 {
-  "data_dir": "./ag_scripts/data/disjunction/",
+  "data_dir": "./ag_scripts/data/negation_disjunction/",
   "bert_model": "bert-base-uncased",
-  "task_name": "disjunction",
+  "task_name": "ag_tasks",
   "output_dir": "_experiments/bert_disj_test",
   "cache_dir": "",
   "max_seq_length": 128,
