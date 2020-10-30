@@ -216,48 +216,56 @@ class NegationTemplate(Template):
             print(self.location_1, self.location_2, self.location_3)
 
     def pos_i(self):
+        ''' p |= -q '''
         sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}."
         sentence2 = f"{self.person_1} {self.neg_verb} {self.location_2}."
         pairID = f"{self.dset[0]}-{self.counter}"
         return sentence1, sentence2, pairID
 
     def pos_ii(self):
+        ''' p, q |= p '''
         sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}. {self.person_1} {self.neg_verb} {self.location_2}."
         sentence2 = f"{self.person_1} {self.pos_verb} {self.location_1}."
         pairID = f"{self.dset[0]}-{self.counter+1}"
         return sentence1, sentence2, pairID
 
     def pos_iii(self):
+        ''' p, -q |= p '''
         sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}. {self.person_2} {self.neg_verb} {self.location_1}."
         sentence2 = f"{self.person_1} {self.pos_verb} {self.location_1}."
         pairID = f"{self.dset[0]}-{self.counter+2}"
         return sentence1, sentence2, pairID
 
     def pos_iv(self):
+        ''' p, -q |= -q '''
         sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}. {self.person_2} {self.neg_verb} {self.location_1}."
         sentence2 = f"{self.person_2} {self.neg_verb} {self.location_1}."
         pairID = f"{self.dset[0]}-{self.counter+3}"
         return sentence1, sentence2, pairID
 
     def neg_i(self):
+        ''' -p |= p '''
         sentence1 = f"{self.person_1} {self.neg_verb} {self.location_1}."
         sentence2 = f"{self.person_1} {self.pos_verb} {self.location_1}."
         pairID = f"{self.dset[0]}-{self.counter+4}"
         return sentence1, sentence2, pairID
 
     def neg_ii(self):
+        ''' p, -q |= -p '''
         sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}. {self.person_2} {self.neg_verb} {self.location_1}."
         sentence2 = f"{self.person_1} {self.neg_verb} {self.location_1}."
         pairID = f"{self.dset[0]}-{self.counter+5}"
         return sentence1, sentence2, pairID
 
     def neg_iii(self):
+        ''' p, -q |= q '''
         sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}. {self.person_1} {self.neg_verb} {self.location_2}."
         sentence2 = f"{self.person_1} {self.pos_verb} {self.location_2}."
         pairID = f"{self.dset[0]}-{self.counter+6}"
         return sentence1, sentence2, pairID
 
     def neg_iv(self):
+        ''' p, q |= -q '''
         sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}. {self.person_1} {self.pos_verb} {self.location_2}."
         sentence2 = f"{self.person_1} {self.neg_verb} {self.location_2}."
         pairID = f"{self.dset[0]}-{self.counter+7}"
@@ -286,6 +294,7 @@ class DisjunctionTemplate(Template):
             print(self.location_1, self.location_2, self.location_3)
 
     def pos_i(self):
+        ''' p |= p v q '''
         sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}."
         sentence2 = f"{self.person_1} or {self.person_2} {self.pos_verb} {self.location_1}."
         pairID = f"{self.dset[0]}-{self.counter}"
@@ -361,3 +370,27 @@ if __name__ == '__main__':
     for x in ['negation', 'disjunction', 'negation_disjunction']:
         args = Namespace(x)
         TemplateSampleGenerator(args)
+
+'''
+Making larger templates
+- Use non-ambigous language: issue with formula p & q v r is does it mean:
+    1. (p & q) v r 
+    2. p & (q v r)
+- So does that mean 
+    1. (john went to rome and jane went to barcelona) or jim went to venice 
+    2. john went to rome and (jane went to barcelone or jim went to venice)
+But we can disambiguate the language:
+    1. john and jane went to rome or jim went to venice
+    2. john went to rome and jane or jim went to venice
+
+Conditional:
+- If a v b -> c
+
+Disambiguation types:
+- And / or (covered above)
+- Negation is easy
+- Conditional??
+
+
+Issue is of nesting (above only works for shallow nesting e.g. fails at (a v (b & c) v d) v e)
+'''

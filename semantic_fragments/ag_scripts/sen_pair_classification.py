@@ -822,7 +822,7 @@ def run_eval(args, task_name, processor, label_list, tokenizer, output_mode, mod
 
         eval_loss = eval_loss / nb_eval_steps
         preds = preds[0]
-        if task_name == 'disjunction' and num_labels == 3:
+        if task_name == 'ag_tasks' and num_labels == 3:
             preds[:, 1] = -1e10    # Set logits for NEUTRAL to large negative so they never are argmax
         if output_mode == "classification":
             preds = np.argmax(preds, axis=1)
