@@ -1,8 +1,8 @@
 {
-  "data_dir": "./ag_scripts/data/negation_disjunction/",
+  "data_dir": "./ag_scripts/data/proplog/v1/",
   "bert_model": "bert-base-uncased",
   "task_name": "ag_tasks",
-  "output_dir": "_experiments/bert_disj_test",
+  "output_dir": "_experiments/proplog/v1/",
   "cache_dir": "",
   "max_seq_length": 128,
   "do_train": true,
@@ -19,8 +19,8 @@
   "gradient_accumulation_steps": 1,
   "fp16": false,
   "loss_scale": 0,
-  "run_existing": "bert_scripts/bert_models/snli/pytorch_model.bin",
-  "bert_config": "bert_scripts/bert_models/snli/bert_config.json",
+  "run_existing": "_experiments/bert_prop_v2_99k_snli/pytorch_model.bin",
+  "bert_config": "_experiments/bert_prop_v2_99k_snli/bert_config.json",
   "inoculate": "",
   "freeze_embed": false,
   "remove_model": false,
@@ -32,6 +32,8 @@
   "server_ip": "",
   "server_port": "",
   "logger": "wandb",
-  "val_check_interval": 0.05
+  "val_check_interval": 0.1,
+  "freeze_model": false,
+  "eval_snli_dir": ""
 }
 

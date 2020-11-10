@@ -11,7 +11,7 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "pythonPath": "/vol/bitbucket/aeg19/.envs/semfrags/bin/python",
-            "justMyCode": true,
+            "justMyCode": false,
             "cwd": "/vol/bitbucket/aeg19/logical_plms/semantic_fragments"
         }
     ]

@@ -25,10 +25,11 @@ from pytorch_pretrained_bert.tokenization import BertTokenizer
 from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
 
 import wandb
+import json
 
 logging.basicConfig(format = '%(asctime)s - %(levelname)s - %(name)s -   %(message)s',
             datefmt = '%m/%d/%Y %H:%M:%S',
-            level = logging.INFO)
+            level = logging.INFO) # level = logging.CRITICAL)
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +219,37 @@ class PolarityProcessor(DataProcessor):
             label = line[3]
             examples.append(
                 InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+        return examples    
+
+
+class AGPolarityProcessor(DataProcessor):
+    """..."""
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_tsv(os.path.join(data_dir, "challenge_train.tsv")), "train")
+
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_tsv(os.path.join(data_dir, "challenge_dev.tsv")),"dev")
+
+    def get_labels(self):
+        """See base class."""
+        return ["ENTAILMENT", "CONTRADICTION"]
+
+    def _create_examples(self, lines, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        for (i, line) in enumerate(lines):
+            guid = line[0] #"%s-%s" % (set_type, line[0])
+            text_a = line[1]
+            text_b = line[2]
+            label = line[3]
+            if label != 'NEUTRAL':
+                examples.append(
+                    InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
         return examples    
 
 
@@ -448,7 +480,7 @@ def _read_modified_sick(sick_path,with_arrows,run_type):
     """Reads the sick modified datasets
 
     :param sick_path: path to the modified sick files 
-    :param with_arrows: should you leave on the arrows? 
+    :param with_arrows: should you leave on the arrows?
     """
     full_lemmatized = os.path.join(sick_path,"sick_uniq.raw.tok.clean.lemma.polarized")
     full_raw = os.path.join(sick_path,"sick_uniq.raw.tok.clean.surface_form.polarized")
@@ -516,7 +548,6 @@ def _read_modified_sick(sick_path,with_arrows,run_type):
 
     logger.info('Parsed %d lines, with_arrows=%s, run_type=%s' % (len(lines),with_arrows,run_type))
     return lines
-
 
 class SICKProcessor(RteProcessor):
     """Processor for the RTE data set (GLUE version)."""
@@ -754,7 +785,7 @@ def compute_metrics(task_name, preds, labels):
     else:
         raise KeyError(task_name)
 
-def run_eval(args, task_name, processor, label_list, tokenizer, output_mode, model, device, num_labels, global_step, tr_loss, nb_tr_steps):
+def run_eval(args, task_name, eval_features, label_list, tokenizer, output_mode, model, device, num_labels, global_step, tr_loss, nb_tr_steps, processor, snli=False):
     ########################
     # MAIN EVALUATION LOOP #
     ########################
@@ -764,17 +795,8 @@ def run_eval(args, task_name, processor, label_list, tokenizer, output_mode, mod
         #############################
         # ### SPECIAL CASE FOR SICK #
         #############################
-        if task_name == "sick":
-            orig = args.sick_orig
-            if args.sick_mod: orig = False
-            eval_examples = processor.get_dev_examples(args.data_dir, orig=orig, with_arrows=args.with_arrows)
-        else:
-            eval_examples = processor.get_dev_examples(args.data_dir)
-
-        eval_features = convert_examples_to_features(
-            eval_examples, label_list, args.max_seq_length, tokenizer, output_mode)
         logger.info("***** Running evaluation *****")
-        logger.info("  Num examples = %d", len(eval_examples))
+        logger.info("  Num examples = %d", len(eval_features))
         logger.info("  Batch size = %d", args.eval_batch_size)
         all_input_ids = torch.tensor([f.input_ids for f in eval_features], dtype=torch.long)
         all_input_mask = torch.tensor([f.input_mask for f in eval_features], dtype=torch.long)
@@ -829,7 +851,7 @@ def run_eval(args, task_name, processor, label_list, tokenizer, output_mode, mod
         elif output_mode == "regression":
             preds = np.squeeze(preds)
         result = compute_metrics(task_name, preds, all_label_ids.numpy())     # TODO
-        analyse_results(preds, all_label_ids.numpy())
+        correct, summary = analyse_results(preds, all_label_ids.numpy())
         loss = tr_loss/nb_tr_steps if args.do_train else None
 
         result['eval_loss'] = eval_loss
@@ -837,6 +859,8 @@ def run_eval(args, task_name, processor, label_list, tokenizer, output_mode, mod
         result['loss'] = loss
         
         if args.logger == 'wandb':
+            if snli:
+                result = {'snli_acc': result['acc']}
             wandb.log(result)
 
         output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
@@ -845,6 +869,23 @@ def run_eval(args, task_name, processor, label_list, tokenizer, output_mode, mod
             for key in sorted(result.keys()):
                 logger.info("  %s = %s", key, str(result[key]))
                 writer.write("%s = %s\n" % (key, str(result[key])))
+            writer.write(json.dumps(summary))
+
+        if task_name == 'ag_tasks' and not snli:
+            data = processor._read_tsv(os.path.join(args.data_dir, "challenge_dev.tsv"))
+            data = [row + [result] for row,result in zip(data, correct)]
+            ext = os.path.basename(os.path.normpath(args.data_dir))
+            path = os.path.join(args.output_dir, f"{ext}_correct_results.txt")
+            with open(path, "w") as f:
+                for d in data:
+                    f.write(f"{d}\n")
+
+            path = os.path.join(args.output_dir, f"{ext}_eval_results.txt")
+            with open(path, "w") as writer:
+                for key in sorted(result.keys()):
+                    writer.write("%s = %s\n" % (key, str(result[key])))
+                writer.write(json.dumps(summary))
+
 
         # hack for MNLI-MM
         if task_name == "mnli":
@@ -922,6 +963,8 @@ def analyse_results(preds, labels):
         correct_dct[n%8][int(val)] += 1
 
     print('\n',correct_dct,'\n')
+
+    return correct, correct_dct
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -1016,6 +1059,9 @@ def parse_args():
     parser.add_argument('--logger',
                         default='default', choices=['default', 'wandb'],
                         help="Type of logger to use. wandb will use weights and biases.")
+    parser.add_argument('--eval_snli_dir',
+                        default='default',
+                        help="Path to SNLI data to eval on addtional dataset.")
 
     ##################################
     # FOR RUNNING AN EXISTING MODEL  #
@@ -1038,6 +1084,11 @@ def parse_args():
                         default=False,
                         action='store_true',
                         help="Freeze embedding parameters when inoculating the model")
+
+    ## freezing all of model except classifier layer
+    parser.add_argument("--freeze_model",
+                        default=False, choices=['true', 'false'],
+                        help="Freeze all of model except classifier layer")
 
     ## remove model when finished 
     parser.add_argument("--remove_model",
@@ -1078,10 +1129,12 @@ def main():
     if len(sys.argv) == 1:  # Hack to flag if being called from debugger
         sys.path.append('.')
         from ag_scripts.utils import dump_args, load_args
-        args = load_args()
+        args = load_args('./ag_scripts/aux/set_2.txt')
     else:
         args = parse_args()
-        # dump_args(args)
+
+    # Save args to file
+    dump_args(args)
 
     if args.logger == 'wandb':
         wandb.init(project="test", config=args)
@@ -1116,6 +1169,7 @@ def main():
         "polarity" : PolarityProcessor,
         ### AG ###
         "ag_tasks": AGProcessor,
+        "ag_polarity": AGPolarityProcessor,
     }
 
     output_modes = {
@@ -1188,6 +1242,9 @@ def main():
     processor = processors[task_name]()
     output_mode = output_modes[task_name]
 
+    if args.eval_snli_dir:
+        snli_processor = processors['polarity']
+
     if task_name == 'disjunction' and args.do_train == True:
         label_list = processor.get_reduced_labels()
     else:            
@@ -1251,12 +1308,18 @@ def main():
             #         param.requires_grad = False
 
     else:
+        # model = BertForSequenceClassification.from_pretrained('bert-base-uncased', cache_dir='/vol/bitbucket/aeg19/.pytorch_pretrained_bert/distributed_-1',num_labels=3)
         model = BertForSequenceClassification.from_pretrained(args.bert_model,
                 cache_dir=cache_dir,
                 num_labels=num_labels)
     
     if args.logger == 'wandb':
         wandb.watch(model)
+
+    if args.freeze_model:
+        # Don't do this! The model performs poorly
+        for name, param in model.bert.named_parameters():                
+            param.requires_grad = False
 
     if args.fp16:
         model.half()
@@ -1303,6 +1366,23 @@ def main():
                              warmup=args.warmup_proportion,
                              t_total=num_train_optimization_steps)
 
+    if args.do_eval:
+        if task_name == "sick":
+            orig = args.sick_orig
+            if args.sick_mod: orig = False
+            eval_examples = processor.get_dev_examples(args.data_dir, orig=orig, with_arrows=args.with_arrows)
+        else:
+            eval_examples = processor.get_dev_examples(args.data_dir)
+
+        eval_features = convert_examples_to_features(
+            eval_examples, label_list, args.max_seq_length, tokenizer, output_mode)
+
+        if args.eval_snli_dir:
+            snli_processor = processors['ag_polarity']()
+            snli_examples = snli_processor.get_dev_examples(args.eval_snli_dir)
+            snli_eval_features = convert_examples_to_features(
+                snli_examples, label_list, args.max_seq_length, tokenizer, output_mode)
+            
     ######################
     # MAIN TRAINING LOOP #
     ######################
@@ -1334,7 +1414,8 @@ def main():
         train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 
         model.train()
-        for _ in trange(int(args.num_train_epochs), desc="Epoch"):
+        total_loss = 0
+        for epoch in trange(int(args.num_train_epochs), desc="Epoch"):
             tr_loss = 0
             nb_tr_examples, nb_tr_steps = 0, 0
             pbar = tqdm(train_dataloader, desc="Iteration")
@@ -1367,8 +1448,11 @@ def main():
                 nb_tr_steps += 1
 
                 # run eval loop
-                if step % int(len(train_dataloader) * args.val_check_interval) == 0:
-                    run_eval(args, task_name, processor, label_list, tokenizer, output_mode, model, device, num_labels, global_step, tr_loss, nb_tr_steps)
+                if args.do_eval and step % int(len(train_dataloader) * args.val_check_interval) == 0:
+                    if args.eval_snli_dir: # TODO
+                        run_eval(args, task_name, snli_eval_features, label_list, tokenizer, output_mode, model, device, num_labels, global_step, tr_loss, nb_tr_steps, snli_processor, True)
+
+                    run_eval(args, task_name, eval_features, label_list, tokenizer, output_mode, model, device, num_labels, global_step, tr_loss, nb_tr_steps, processor)
 
                 if (step + 1) % args.gradient_accumulation_steps == 0:
                     if args.fp16:
@@ -1385,9 +1469,10 @@ def main():
                 pbar.update()
 
                 if args.logger == 'wandb':
-                    wandb.log({'loss': loss, 'global_loss': tr_loss/global_step})
+                    wandb.log({'loss': loss, 'global_loss': tr_loss/global_step, 'epoch': epoch})
                 
             pbar.close()
+            total_loss += tr_loss
 
         ##################
         # POST TRAINING  #
@@ -1427,7 +1512,7 @@ def main():
         print("Removing the backed up model!")
         os.remove(output_model_file)
 
-    run_eval(args, task_name, processor, label_list, tokenizer, output_mode, model, device, num_labels, global_step, tr_loss, nb_tr_steps)
+    run_eval(args, task_name, eval_features, label_list, tokenizer, output_mode, model, device, num_labels, global_step, tr_loss, nb_tr_steps, processor)
 
 
 if __name__ == "__main__":

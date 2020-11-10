@@ -1,0 +1,33 @@
+
+Sentence 1                                  Sentence 1                      Label
+((i&(j>i))&((e|u)&u))                       ~(((((v&v)>i)|((i>i)|v))>v))    0
+((~(((r|o)&r))>~(((y|a)|m)))&(y>(r>j)))     (y>(((j>j)>m)>j))               1
+
+
+
+Sentence 1                                  Sentence 1                      Label
+i & u & (e | u) & (i | ~j)                  ~v                              0
+(r | ~a) & (r | ~m) & (r | ~y) & \          j | ~m | ~y                     1
+    (o | r | ~a) & (o | r | ~m) & \
+    (o | r | ~y) & (j | ~r | ~y)
+
+
+{
+    "sentence1": "Raymond visited Afghanistan. Howard visited Saint Vincent & the 
+Grenadines. Carl visited Syria or Howard visited Saint Vincent & the Grenadines. 
+Raymond visited Afghanistan or Adrian did not visit Democratic Republic of the Congo.", 
+    "sentence2": "Arthur did not visit Bahrain.", 
+    "gold_label": "CONTRADICTION"
+}
+{
+    "sentence1": "Harvey visited Senegal or Brent did not visit Ecuador. Harvey visited 
+Senegal or Chris did not visit Italy. Harvey visited Senegal or Edward did not visit 
+Central African Republic. Kenneth visited Saudi Arabia or Harvey visited Senegal or 
+Brent did not visit Ecuador. Kenneth visited Saudi Arabia or Harvey visited Senegal 
+or Chris did not visit Italy. Kenneth visited Saudi Arabia or Harvey visited Senegal 
+or Edward did not visit Central African Republic. Marion visited Benin or Harvey did 
+not visit Senegal or Edward did not visit Central African Republic.", 
+    "sentence2": "Marion visited Benin. Chris did not visit Italy. Edward did not visit 
+Central African Republic.", 
+    "gold_label": "ENTAILMENT"
+}

@@ -1,0 +1,8 @@
+77: test of full templates
+99: prop templates v1 (all 99k samples)
+119: prop templates v2 (all 99k samples)
+126: prop templates v2 (all 99k samples) (removing the 128 token limit)
+142: prop templates v2 (all 99k samples) (fine-tune on SNLI during training)
+
+149: proplog data v2
+150: proplog data v1

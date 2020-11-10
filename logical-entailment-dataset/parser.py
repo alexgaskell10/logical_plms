@@ -45,9 +45,9 @@ For all "all x . k" is parsed as a binary op, with op-type "A" and arguments
 [x, k]. Similarly for "exists x . k".
 """
 
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
+# from __future__ import absolute_import
+# from __future__ import division
+# from __future__ import print_function
 
 import collections
 import functools

@@ -2,8 +2,10 @@ import sys
 import os
 import json
 import csv
+import string
 from random import choice
-from utils import TemplateUtils
+from utils import TemplateUtils, load_formulae
+import pandas as pd
 
 class TemplateSampleGenerator:
     def __init__(self, args):
@@ -11,6 +13,7 @@ class TemplateSampleGenerator:
         self.iters = args.iters
         self.outdir = args.outdir
         self.dev_split = args.dev_split
+        self.formulae_dir = args.formulae_dir
 
         self.generate_samples()
 
@@ -19,36 +22,34 @@ class TemplateSampleGenerator:
             save to file.
         '''
         # Create samples
-        train_samples = []
-        for i in range(int(self.iters*(1-self.dev_split))):
-            train_samples.extend(self.template('train').samples)
+        if self.template != PropositionalTemplate:
+            train_samples = []
+            for i in range(int(self.iters*(1-self.dev_split))):
+                train_samples.extend(self.template('train').samples)
 
-        dev_samples = []
-        for i in range(int(self.iters*self.dev_split)):
-            dev_samples.extend(self.template('dev').samples)
+            dev_samples = []
+            for i in range(int(self.iters*self.dev_split)):
+                dev_samples.extend(self.template('dev').samples)
+        else:
+            dev_samples = self.template('dev', self.formulae_dir).samples
+            train_samples = self.template('train', self.formulae_dir).samples
 
+        self.save_files(dev_samples, 'dev')
+        self.save_files(train_samples, 'train')
+
+    def save_files(self, samples, name):
         # Write to json
-        with open(os.path.join(self.outdir, 'train.json'), 'w') as f:
-            for sample in train_samples:
-                json.dump(sample, f)
-                f.write('\n')
-
-        with open(os.path.join(self.outdir, 'dev.json'), 'w') as f:
-            for sample in dev_samples:
+        with open(os.path.join(self.outdir, f'{name}.json'), 'w') as f:
+            for sample in samples:
                 json.dump(sample, f)
                 f.write('\n')
 
         # Write to tsv
         keys = ['pairID', 'sentence1', 'sentence2', 'gold_label']
-        with open(os.path.join(self.outdir, 'challenge_train.tsv'), 'w') as outfile:
+        with open(os.path.join(self.outdir, f'challenge_{name}.tsv'), 'w') as outfile:
             dict_writer = csv.DictWriter(outfile, keys, delimiter='\t')
             dict_writer.writerows(
-                [{k:v for k,v in sample.items() if k in keys} for sample in train_samples])
-
-        with open(os.path.join(self.outdir, 'challenge_dev.tsv'), 'w') as outfile:
-            dict_writer = csv.DictWriter(outfile, keys, delimiter='\t')
-            dict_writer.writerows(
-                [{k:v for k,v in sample.items() if k in keys} for sample in dev_samples])
+                [{k:v for k,v in sample.items() if k in keys} for sample in samples])
 
 
 class Template(TemplateUtils):
@@ -64,8 +65,28 @@ class Template(TemplateUtils):
         self.counter = counter
         self.load_names_locs()
         self.set_labels()
-        self.set_vars()
-        self.create_samples()
+
+    def create_samples(self):
+        for label in ['pos', 'neg']:
+            for num in ['i', 'ii', 'iii', 'iv']:
+                # Call child class methods
+                s1, s2, pairID = getattr(self, f"{label}_{num}")()
+                
+                # Add distractor sentences and shuffle sentence order
+                # to prevent the model from memorizing
+                # s1 = self.add_distractors(s1)
+                # s1 = Template.shuffle_sentence(s1)
+                
+                # Save relevant info
+                gold_label = getattr(self, f"{label}_label")
+                captionID = f"c-{pairID}"
+                self.samples.append({
+                    "sentence1": s1,
+                    "sentence2": s2,
+                    "gold_label": gold_label,
+                    "pairID": pairID,
+                    "captionID": captionID,
+                })
 
     def load_names_locs(self):
         with open('data/names_locations.txt', 'r') as f:
@@ -80,53 +101,13 @@ class Template(TemplateUtils):
     def set_vars(self):
         raise NotImplementedError
 
-    def create_samples(self):
-        for label in ['pos', 'neg']:
-            for num in ['i', 'ii', 'iii', 'iv']:
-                # Call child class methods
-                s1, s2, pairID = getattr(self, f"{label}_{num}")()
-                
-                # Add distractor sentences and shuffle sentence order
-                # to prevent the model from memorizing
-                s1 = self.add_distractors(s1)
-                s1 = Template.shuffle_sentence(s1)
-                
-                # Save relevant info
-                gold_label = getattr(self, f"{label}_label")
-                captionID = f"c-{pairID}"
-                self.samples.append({
-                    "sentence1": s1,
-                    "sentence2": s2,
-                    "gold_label": gold_label,
-                    "pairID": pairID,
-                    "captionID": captionID,
-                })
 
-    def add_distractors(self, sentence: str, max_num: int=5):
-        ''' Randomly generate and add distractor facts to a sentence.
-        '''
-        for i in range(choice(range(max_num))):
-            # Choose names and locations from remaining pool
-            person_1 = choice(self.names)
-            person_2 = choice([n for n in self.names if n!=person_1])
-            loc_1 = choice(self.locations)
-            loc_2 = choice([l for l in self.locations if l!=loc_1])
-
-            # Randomly choose a distractor template
-            template = choice(list(self.DISTRACTOR_TEMPLATES.values()))
-
-            # Create distractor facts
-            distractor = template(person_1, person_2, loc_1, loc_2, self.pos_verb, self.neg_verb)
-
-            # Append to original sentence:
-            sentence += distractor
-
-        return sentence
-
-
-class NegationDisjunctionTemplate(Template):
-    def __init__(self, dset, counter=0):
+class PropositionalTemplate(Template):
+    def __init__(self, dset, formulae_dir, counter=0):
         super().__init__(dset, counter)
+        self.dset = dset
+        self.formulae_dir = formulae_dir
+        self.process_formulae()
 
     def set_labels(self):
         self.pos_verb = 'visited'
@@ -134,69 +115,41 @@ class NegationDisjunctionTemplate(Template):
         self.pos_label = "ENTAILMENT"
         self.neg_label = "CONTRADICTION"
 
-    def set_vars(self):
-        self.person_1 = self.names.pop(choice(range(len(self.names))))
-        self.person_2 = self.names.pop(choice(range(len(self.names))))
-        self.location_1 = self.locations.pop(choice(range(len(self.locations))))
-        self.location_2 = self.locations.pop(choice(range(len(self.locations))))
-        self.location_3 = self.locations.pop(choice(range(len(self.locations))))
+    def process_formulae(self):
+        ''' Load datasets of propositional logic formulae and convert them
+            into natural language templates.
+        '''
+        df = pd.read_csv(os.path.join(self.formulae_dir, f"{self.dset}.csv"))
+        
+        # Convert propositional formulae to natural language here.
+        # First join sentence1 & sentence2 (with seperator),
+        # iterate through the formula & convert to natural language
+        # using templates, then split column back into sentence1
+        # & sentence2
+        df['sentence'] = df[['sentence1', 'sentence2']].agg(lambda x: x[0].split() + ['§§§'] + x[1].split(), axis=1)
+        df['sentence'] = df['sentence'].apply(self.convert_to_template)
+        df[['sentence1', 'sentence2']] = df.sentence.str.split("§§§", expand=True).applymap(lambda x: x.strip())
+        df.drop('sentence', axis=1, inplace=True)
+        
+        # Convert labels to correct terms
+        df['gold_label'] = df.gold_label.map({0: self.neg_label, 1: self.pos_label})
+        
+        # Add pairID and captionID columns
+        df['pairID'] = df.index.map(lambda x: f'{self.dset[0]}-{str(x)}')
+        df['captionID'] = df.pairID.map(lambda x: f'c-{x}')      
 
-        if False:
-            print(self.person_1, self.person_2)
-            print(self.location_1, self.location_2, self.location_3)
+        # Drop rows with tokens > bert's limit
+        len_flag = (df['sentence1'].str.split().apply(len) + df['sentence2'].str.split().apply(len)) <= 400
+        df = df[len_flag]
 
-    def pos_i(self):
-        sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}."
-        sentence2 = f"{self.person_1} {self.neg_verb} {self.location_2} or {self.location_3}."
-        pairID = f"{self.dset[0]}-{self.counter}"
-        return sentence1, sentence2, pairID
-
-    def pos_ii(self):
-        sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}. {self.person_1} {self.neg_verb} {self.location_2}."
-        sentence2 = f"{self.person_1} {self.pos_verb} {self.location_1} or {self.location_2}."
-        pairID = f"{self.dset[0]}-{self.counter+1}"
-        return sentence1, sentence2, pairID
-
-    def pos_iii(self):
-        sentence1 = f"{self.person_1} or {self.person_2} {self.pos_verb} {self.location_1}. {self.person_2} {self.neg_verb} {self.location_1}."
-        sentence2 = f"{self.person_1} {self.pos_verb} {self.location_1}."
-        pairID = f"{self.dset[0]}-{self.counter+2}"
-        return sentence1, sentence2, pairID
-
-    def pos_iv(self):
-        sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1} or {self.location_2}. {self.person_1} {self.neg_verb} {self.location_2}."
-        sentence2 = f"{self.person_1} {self.pos_verb} {self.location_1}."
-        pairID = f"{self.dset[0]}-{self.counter+3}"
-        return sentence1, sentence2, pairID
-
-    def neg_i(self):
-        sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}."
-        sentence2 = f"{self.person_1} {self.neg_verb} {self.location_1} or {self.location_2}."
-        pairID = f"{self.dset[0]}-{self.counter+4}"
-        return sentence1, sentence2, pairID
-
-    def neg_ii(self):
-        sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1} or {self.location_2}. {self.person_1} {self.neg_verb} {self.location_1}."
-        sentence2 = f"{self.person_1} {self.neg_verb} {self.location_2}."
-        pairID = f"{self.dset[0]}-{self.counter+5}"
-        return sentence1, sentence2, pairID
-
-    def neg_iii(self):
-        sentence1 = f"{self.person_1} or {self.person_2} {self.pos_verb} {self.location_1}. {self.person_2} {self.neg_verb} {self.location_1}."
-        sentence2 = f"{self.person_1} {self.neg_verb} {self.location_1}."
-        pairID = f"{self.dset[0]}-{self.counter+6}"
-        return sentence1, sentence2, pairID
-
-    def neg_iv(self):
-        sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}. {self.person_2} {self.neg_verb} {self.location_1}."
-        sentence2 = f"{self.person_1} or {self.person_2} {self.neg_verb} {self.location_1}."
-        pairID = f"{self.dset[0]}-{self.counter+7}"
-        return sentence1, sentence2, pairID
+        self.samples = df.to_dict('records')
 
 
 class NegationTemplate(Template):
     def __init__(self, dset, counter=0):
         super().__init__(dset, counter)
+        self.set_vars()
+        self.create_samples()
 
     def set_labels(self):
         self.pos_verb = 'visited'
@@ -272,9 +225,83 @@ class NegationTemplate(Template):
         return sentence1, sentence2, pairID
 
 
+class NegationDisjunctionTemplate(Template):
+    def __init__(self, dset, counter=0):
+        super().__init__(dset, counter)
+        self.set_vars()
+        self.create_samples()
+
+    def set_labels(self):
+        self.pos_verb = 'visited'
+        self.neg_verb = 'did not visit'
+        self.pos_label = "ENTAILMENT"
+        self.neg_label = "CONTRADICTION"
+
+    def set_vars(self):
+        self.person_1 = self.names.pop(choice(range(len(self.names))))
+        self.person_2 = self.names.pop(choice(range(len(self.names))))
+        self.location_1 = self.locations.pop(choice(range(len(self.locations))))
+        self.location_2 = self.locations.pop(choice(range(len(self.locations))))
+        self.location_3 = self.locations.pop(choice(range(len(self.locations))))
+
+        if False:
+            print(self.person_1, self.person_2)
+            print(self.location_1, self.location_2, self.location_3)
+
+    def pos_i(self):
+        sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}."
+        sentence2 = f"{self.person_1} {self.neg_verb} {self.location_2} or {self.location_3}."
+        pairID = f"{self.dset[0]}-{self.counter}"
+        return sentence1, sentence2, pairID
+
+    def pos_ii(self):
+        sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}. {self.person_1} {self.neg_verb} {self.location_2}."
+        sentence2 = f"{self.person_1} {self.pos_verb} {self.location_1} or {self.location_2}."
+        pairID = f"{self.dset[0]}-{self.counter+1}"
+        return sentence1, sentence2, pairID
+
+    def pos_iii(self):
+        sentence1 = f"{self.person_1} or {self.person_2} {self.pos_verb} {self.location_1}. {self.person_2} {self.neg_verb} {self.location_1}."
+        sentence2 = f"{self.person_1} {self.pos_verb} {self.location_1}."
+        pairID = f"{self.dset[0]}-{self.counter+2}"
+        return sentence1, sentence2, pairID
+
+    def pos_iv(self):
+        sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1} or {self.location_2}. {self.person_1} {self.neg_verb} {self.location_2}."
+        sentence2 = f"{self.person_1} {self.pos_verb} {self.location_1}."
+        pairID = f"{self.dset[0]}-{self.counter+3}"
+        return sentence1, sentence2, pairID
+
+    def neg_i(self):
+        sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}."
+        sentence2 = f"{self.person_1} {self.neg_verb} {self.location_1} or {self.location_2}."
+        pairID = f"{self.dset[0]}-{self.counter+4}"
+        return sentence1, sentence2, pairID
+
+    def neg_ii(self):
+        sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1} or {self.location_2}. {self.person_1} {self.neg_verb} {self.location_1}."
+        sentence2 = f"{self.person_1} {self.neg_verb} {self.location_2}."
+        pairID = f"{self.dset[0]}-{self.counter+5}"
+        return sentence1, sentence2, pairID
+
+    def neg_iii(self):
+        sentence1 = f"{self.person_1} or {self.person_2} {self.pos_verb} {self.location_1}. {self.person_2} {self.neg_verb} {self.location_1}."
+        sentence2 = f"{self.person_1} {self.neg_verb} {self.location_1}."
+        pairID = f"{self.dset[0]}-{self.counter+6}"
+        return sentence1, sentence2, pairID
+
+    def neg_iv(self):
+        sentence1 = f"{self.person_1} {self.pos_verb} {self.location_1}. {self.person_2} {self.neg_verb} {self.location_1}."
+        sentence2 = f"{self.person_1} or {self.person_2} {self.neg_verb} {self.location_1}."
+        pairID = f"{self.dset[0]}-{self.counter+7}"
+        return sentence1, sentence2, pairID
+
+
 class DisjunctionTemplate(Template):
     def __init__(self, dset, counter=0):
         super().__init__(dset, counter)
+        self.set_vars()
+        self.create_samples()
 
     def set_labels(self):
         self.pos_verb = 'visited'
@@ -347,6 +374,7 @@ class Namespace:
     def __init__(self, task):
         self.iters = 2048
         self.dev_split = 0.25
+        self.formulae_dir = '/vol/bitbucket/aeg19/logical_plms/semantic_fragments/ag_scripts/data/logical-entailment-dataset'
         self.task = task
 
         self.configure_outdir()
@@ -359,38 +387,19 @@ class Namespace:
             self.template = DisjunctionTemplate
         elif self.task.lower() == 'negation_disjunction':
             self.template = NegationDisjunctionTemplate
+        elif self.task.lower() == 'propositional':
+            self.template = PropositionalTemplate
 
     def configure_outdir(self):
-        assert self.task.lower() in ['negation', 'disjunction', 'negation_disjunction']
+        assert self.task.lower() in ['negation', 'disjunction', 'negation_disjunction', 'propositional']
         self.outdir = os.path.join('data', self.task)
         os.makedirs(self.outdir, exist_ok=True)
 
 
 if __name__ == '__main__':
-    for x in ['negation', 'disjunction', 'negation_disjunction']:
+    # for x in ['negation', 'disjunction', 'negation_disjunction']:
+    # for x in ['propositional']:
+    for x in ['negation_disjunction']:
         args = Namespace(x)
         TemplateSampleGenerator(args)
-
-'''
-Making larger templates
-- Use non-ambigous language: issue with formula p & q v r is does it mean:
-    1. (p & q) v r 
-    2. p & (q v r)
-- So does that mean 
-    1. (john went to rome and jane went to barcelona) or jim went to venice 
-    2. john went to rome and (jane went to barcelone or jim went to venice)
-But we can disambiguate the language:
-    1. john and jane went to rome or jim went to venice
-    2. john went to rome and jane or jim went to venice
-
-Conditional:
-- If a v b -> c
-
-Disambiguation types:
-- And / or (covered above)
-- Negation is easy
-- Conditional??
-
-
-Issue is of nesting (above only works for shallow nesting e.g. fails at (a v (b & c) v d) v e)
-'''
+   

@@ -1,0 +1,9 @@
+numpy==1.15.4
+pytorch-pretrained-bert==0.6.1 ## 
+# pytorch-transformers==0.6.1 ## older version above 
+tqdm
+scikit-learn
+conda
+
+sympy==1.6.2
+pandas==1.1.3
