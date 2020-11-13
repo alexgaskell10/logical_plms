@@ -5,9 +5,11 @@ import os
 import sys
 import re
 import time
+import string
 
 from random import shuffle, choice, sample
 from math import ceil
+from collections import OrderedDict
 import pandas as pd
 import numpy as np
 import multiprocessing as mp
@@ -90,7 +92,7 @@ class PropositionalFormulaeProcessor:
             df['count'] = np.zeros(len(df))
         else:
             # Compile regex
-            self.init_re(variant)
+            self.init_regex()
             # Draw parameters for number and type of disturbances
             df['flavour'] = np.random.choice(4, len(df))
             df['count'] = np.random.choice(3, len(df))
@@ -141,73 +143,70 @@ class PropositionalFormulaeProcessor:
             shuffle(terms)
             s = ' & '.join(terms)
 
+            # Apply equivalences to perturb formula
             if flavour < 1:
                 ops = []    # Do nothing
             elif flavour < 2:
-                ops = ['or-and', 'dub-neg', 'rev', 'impl', 'dub-neg']
+                ops = ['or-and', 'dub-neg', 'rev', 'impl', 'spaces', 'dub-neg']
             elif flavour < 3:
                 ops = ['or-and', 'dub-neg', 'rev',]
             else:
-                ops = ['impl', 'dub-neg']
+                ops = ['impl', 'spaces', 'dub-neg',]
 
             for op in ops:
                 s = re.sub(*self.res[op], s, count)
 
-            # Confirm logical operators haven't altered the semantics
-            f = lambda x: x[0]==x[1]
-            if all(map(f, bool_map(cnf, s)[1].items())):
+            # Ensure new and old formulae are semantically equivalent
+            test_func = lambda bm: bm and all(map(lambda x: x[0]==x[1], bm[1].items()))
+            new_formula = s.replace('_', '')
+            try:
+                bm = bool_map(cnf, new_formula)
+            except:
+                bm = None
+
+            if test_func(bm): 
                 pass    # Normal case- formulae are equivalent
-            elif all(map(f, bool_map(cnf, simplify_logic(s, force=True))[1].items())):
-                pass    # Formulae are equivalent after simplification (required if a clause is (A | ~A))
-            elif all(map(f, bool_map(simplify_logic(cnf, force=True), simplify_logic(s, force=True))[1].items())):
-                raise ValueError(f'Simplification should not change things here. Formulae: \n'
-                                f'CNF:\t{cnf}\ns:\t{s}')
             else:
-                raise ValueError(f'Formulae are not equivalent. Formulae: \n'
-                                f'CNF:\t{cnf}\ns:\t{s}')
-
-            # try:
-            #     assert all(map(lambda x: x[0]==x[1], bool_map(cnf, s)[1].items())), \
-            #         f"{cnf} \t != \t {s}"
-            # except: 
-            #     assert sorted(bool_map(cnf, s)[1].keys()) == sorted(bool_map(cnf, s)[1].values())
-            #     print(formula, '\t', cnf, '\t', s)
-            #     print(bool_map(cnf, s))
-            #     pass
-
+                bm = bool_map(simplify_logic(cnf, force=True), simplify_logic(new_formula, force=True))
+                if test_func(bm): 
+                    pass    # Formulae are equivalent after simplification (required if a clause is (A | ~A))
+                else:
+                    # raise ValueError(f'Formulae are not equivalent. Formulae: \n'
+                    #                 f'CNF:\t{cnf}\ns:\t{new_formula}')
+                    print(f'Formulae are not equivalent. Formulae: \nCNF:\t{cnf}\ns:\t{new_formula}')
+            
             return s
 
-    def init_re(self, variant):
+    def init_regex(self):
         ''' Function to compile regex so they can be re-used.
         '''
-        if variant != 1:
-            self.res = {
-                # A | B <-> ~(~A & ~B) (De Morgan's law)
-                'or-and': [
-                    re.compile(r"(~?[a-z]) \| (~?[a-z]) \|"),
-                    r"~(~\1 & ~\2) |",
-                ],
-                # ~~A <-> A (remove double negation)
-                'dub-neg': [
-                    re.compile(r"~~"),
-                    "",
-                ],
-                # A | B <-> B | A (Reverse ordering of terms)
-                'rev': [
-                    re.compile(r"(~?(?:[a-z]|\(~?[a-z] & ~?[a-z]\))) \| (~?[a-z])"),
-                    r"\2 | \1",
-                ],
-                # A | B <-> ~A -> B
-                'impl': [
-                    re.compile(r"(~?(?:[a-z]|\(~?[a-z] & ~?[a-z]\))) \| (~?(?:[a-z]|\(~?[a-z] & ~?[a-z]\)))"),
-                    r"~\1 >> \2",
-                ],
-                # A | ~A <-> ""
-                'reduce': [
-                    # re.compile(r"(~?(?:[a-z]|\(~?[a-z] & ~?[a-z]\))) \| (~?(?:[a-z]|\(~?[a-z] & ~?[a-z]\)))"),
-                    # r"~\1 >> \2",
-                ]
-            }
+        self.res = {
+            # A | B <-> ~(~A & ~B) (De Morgan's law)
+            'or-and': [
+                re.compile(r"(~?[a-z]) \| (~?[a-z]) \|"),
+                r"~(~\1 &_ ~\2) |",
+            ],
+            # ~~A <-> A (remove double negation)
+            'dub-neg': [
+                re.compile(r"~~"),
+                "",
+            ],
+            # A | B <-> B | A (Reverse ordering of terms)
+            'rev': [
+                re.compile(r"(~?(?:[a-z]|\(~?[a-z] & ~?[a-z]\))) \| (~?[a-z])"),
+                r"\2 | \1",
+            ],
+            # A | B <-> ~A -> B
+            'impl': [
+                re.compile(r"(~?(?:[a-z]|\(~?[a-z] & ~?[a-z]\))) \| (~?(?:[a-z]|\(~?[a-z] & ~?[a-z]\)))"),
+                r"(~\1 >>_ \2)",
+            ],
+            # ((A | B)) <-> (A | B) (Remove excess spaces)
+            'spaces': [
+                re.compile(r"\((\(~?[a-z] (?:[^\s]+ ~?[a-z])+\))\)"),
+                r"\1",
+            ],
+        }
 
     def func(self, x, variant):
         ''' Helper for multiprocessing to define function
@@ -236,77 +235,7 @@ class TemplateUtils:
         shuffle(sentences)
         return '. '.join(sentences) + '.'
 
-    def convert_to_template_old(self, formula):
-        ''' Converts a propositional logic formula to a natural language 
-            knowledge base using templates.
-
-            args:
-                - formula: str. Propositonal logic formula in conjunctive normal form
-            returns:
-                - kb: str. Natural language knowledge base
-        '''
-        # Remove logical operators
-        logops = ['&', '|']
-        sep = '§§§'
-        formula = [i for i in formula if i not in logops]
-        names = self.names[:]
-        locs = self.locations[:]
-
-        # Create dictionary with all atoms and a name + location for each
-        atom_dct = {}
-        for term in formula:
-            if term != sep:
-                atom = (set(term) & set(string.ascii_lowercase)).pop()
-                atom_dct[atom] = {
-                    'name': names.pop(choice(range(len(names)))),
-                    'loc': locs.pop(choice(range(len(locs)))),
-                }
-
-        # formula = TemplateUtils.reorder_formula(formula)        
-
-        # print(formula); sys.exit()
-        # Create knowledge base by iterating over formula and converting
-        # to natural language using templates
-        kb = []
-        loc = list(atom_dct.values())[0]['loc']
-        while formula:
-            item = formula.pop(0)
-            if item == sep:
-                kb.append(item)
-            elif not '(' in item:
-                if '~' in item:
-                    item = item.strip('~')
-                    # kb.append(f"{atom_dct[item]['name']} {self.neg_verb} {atom_dct[item]['loc']}.")
-                    kb.append(f"{atom_dct[item]['name']} {self.neg_verb} {loc}.")
-                else:
-                    # kb.append(f"{atom_dct[item]['name']} {self.pos_verb} {atom_dct[item]['loc']}.")
-                    kb.append(f"{atom_dct[item]['name']} {self.pos_verb} {loc}.")
-            else:
-                or_items = [item.strip('(')]
-                while True:
-                    item = formula.pop(0)
-                    or_items.append(item.strip(')'))
-                    if ')' in item:
-                        break
-                
-                # Convert disjunction clause into natural language KB
-                # loc = atom_dct[or_items[0].strip('~')]['loc']
-
-                # Split list into atoms and negated atoms
-                pos = [i for i in or_items if '~' not in i]
-                neg = [i.strip('~') for i in or_items if '~' in i]
-                pos_sentence, neg_sentence = '', ''
-                if pos:
-                    pos_sentence = (' or '.join([atom_dct[p]['name'] for p in pos]) + 
-                                        ' ' + self.pos_verb + (' or ' if neg else ''))
-                if neg:
-                    neg_sentence = (' or '.join([atom_dct[n]['name'] for n in neg]) + 
-                                        ' ' + self.neg_verb)
-                kb.append(f'{pos_sentence}{neg_sentence} {loc}.')
-
-        return ' '.join(kb)
-
-    def convert_to_template(self, formula):
+    def convert_to_template_v1(self, formula):
         ''' Converts a propositional logic formula to a natural language 
             knowledge base using templates.
 
@@ -362,6 +291,72 @@ class TemplateUtils:
 
         return ' '.join(kb)
 
+    def convert_to_template_v2(self, formula):
+        # Remove logical operators
+        logops = ['&', '|', '>>']
+        sep = '§§§'
+        names = self.names[:]
+        locs = self.locations[:]
+        # formula = '~(~m &_ c) | ~u §§§ (u >>_ ~m)'.split()
+
+        # Create dictionary with all atoms and a name + location for each
+        atom_dct = {}
+        for term in formula:
+            atom = (set(term) & set(string.ascii_lowercase))
+            if atom:
+                atom_dct[atom.pop()] = {'name': choice(names), 'loc': choice(locs)}
+        # print(atom_dct)
+
+        # Natural language template
+        name = lambda lit: atom_dct[lit.strip('~')]['name']
+        verb = lambda lit: self.neg_verb if '~' in lit else self.pos_verb
+        loc = lambda lit: atom_dct[lit.strip('~')]['loc']
+        base = lambda lit: f"{name(lit)} {verb(lit)} {loc(lit)}"
+        if_base = lambda p,q: f"if {base(p)} then {base(q)}"
+        if_unless = lambda p,q: f"{if_base(p,q)} unless"
+        or_base = lambda _: np.random.choice(["or", "unless"], 1, p=(0.9, 0.1)).item()     # Randomly choose between connectives
+        and_aux = lambda _: choice(["it isn't the case that", "we won't find that"])
+        and_base = lambda p,q: f"{and_aux('')} {base(p)} and {base(q)}"
+        and_unless = lambda p,q: f"{and_aux('')} {base(p)} and {base(q)} unless"
+
+        # Regexs: match the first item and sub for second item
+        exprs = [
+            (re.compile(r"\((~?[a-z])_ >>_ (~?[a-z])_\) \|"), if_unless),
+            (re.compile(r"\((~?[a-z])_ >>_ (~?[a-z])_\)"), if_base),
+            (re.compile(r"~\((~?[a-z])_ &_ (~?[a-z])_\) \|"), and_unless),
+            (re.compile(r"~\((~?[a-z])_ &_ (~?[a-z])_\)"), and_base),
+            (re.compile(r"(~?[a-z])_"), base),
+            (re.compile(r"(\|)"), or_base),
+        ]
+
+        # Preprocessing
+        formula = _formula = ' '.join(formula)
+        formula = re.sub(r"([a-z])", r"\1_", formula)
+        formula = re.sub(r"~~", r"", formula)
+        formula = re.sub(r"\((\([^\)]+\))\)", r"\1", formula)
+        # formula = formula.split(' & ')
+        # formula = ' & '.join(formula)
+
+        sub_func = lambda m: exp[1](*map(lambda i: m.group(i+1), range(len(m.groups()))))
+        for exp in exprs:
+            formula = re.sub(exp[0], sub_func, formula)
+            # formula = apply_str_sub(formula, exp)
+
+        formula = formula.split(' & ')
+        # Post-processing
+        formula = [re.sub(r"\(([^\)]+)\)", r"\1", f) for f in formula]  # Remove brackets
+        formula = [f[0].upper() + f[1:] for f in formula]   # Uppercase first word
+        formula = [re.sub(r" §§§ ([a-z])", lambda m: r". §§§ " + m.group(1).upper(), f) for f in formula]     # Fullstop after first sentence and uppercase first letter of second sentence.
+        if len(formula) > 2:
+            i = choice(range(1, len(formula)-1))
+            formula = '. '.join([' and '.join(['. '.join(formula[:i])] + formula[i:i+1])] + formula[i+1:])
+        else:
+            formula = '. '.join(formula)
+        
+        assert not re.search('_', formula), f"Failed for {_formula}"
+
+        return formula
+
     @staticmethod
     def reorder_formula(formula):
         ''' Reorder the formula so the OR clauses come first
@@ -403,11 +398,52 @@ class TemplateUtils:
 
         return sentence
 
+    @staticmethod
+    def list_clauses(path: str):
+        ''' List the different clauses in a prop logic dataset
+        '''
+        df = pd.read_csv(path).iloc[:15, :]
+        formulae = df['sentence1'].tolist() + df['sentence2'].tolist()
+        
+        def func(s):
+            s = s.replace('_', '')
+            s = re.sub(r"^\((~?[a-z](?: [^\s]+ ~?[a-z])+)\)$", r"\1", s)
+            return s
+
+        formulae = [[func(term) for term in form.split(' & ')] for form in formulae]
+        # unique = pd.Series(formulae).unique()
+        [print(u) for u in formulae]
+        
 
 if __name__ == '__main__':
     path = '/vol/bitbucket/aeg19/logical_plms/semantic_fragments/ag_scripts/data/logical-entailment-dataset'
     variant = 2
-    # PropositionalFormulaeProcessor().load_formulae(path, 'validate', variant).to_csv(
-    #     os.path.join(path, f'v{variant}', 'dev.csv'))
+    PropositionalFormulaeProcessor().load_formulae(path, 'validate', variant).to_csv(
+        os.path.join(path, f'v{variant}', 'dev.csv'))
+
     PropositionalFormulaeProcessor().load_formulae(path, 'train', variant).to_csv(
         os.path.join(path, f'v{variant}', 'train.csv'))
+
+    # TemplateUtils.list_clauses(os.path.join(path, 'v2/dev.csv'))
+
+
+        # def apply_str_sub(formula: list, exp: tuple):
+        #     ''' Helper to apply string subsitutions using regex.
+        #     '''
+        #     def f(match):
+        #         print(len(match.groups()))
+        #         # print(re.compile(r"\((~?[a-z])_ [^\s]+ (~?[a-z])_\)").groups)
+        #         # print(match.group(1), match.group(2))
+        #         return ""
+        #     re.sub(r"\((~?[a-z])_ [^\s]+ (~?[a-z])_\)", f, ' & '.join(formula))
+        #     sys.exit()
+        #     if re.search(exp[0], ' '.join(formula)):    # Skip if pattern not in string
+        #         for n,_ in enumerate(formula):
+        #             if re.search(exp[0], formula[n]):   # Check if pattern in term
+        #                 # Apply substitution to atoms in term
+        #                 for literals in re.findall(exp[0], formula[n]):
+        #                     if isinstance(literals, tuple):
+        #                         formula[n] = re.sub(exp[0], exp[1](*literals), formula[n], 1)
+        #                     else:
+        #                         formula[n] = re.sub(exp[0], exp[1](literals), formula[n], 1)
+        #     return formula

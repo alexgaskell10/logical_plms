@@ -1,8 +1,8 @@
 {
-  "data_dir": "./ag_scripts/data/proplog/v1/",
+  "data_dir": "./ag_scripts/data/propositional_v2/",
   "bert_model": "bert-base-uncased",
   "task_name": "ag_tasks",
-  "output_dir": "_experiments/proplog/v1/",
+  "output_dir": "_experiments/propositional_v2/",
   "cache_dir": "",
   "max_seq_length": 128,
   "do_train": true,

@@ -237,7 +237,7 @@ class AGPolarityProcessor(DataProcessor):
 
     def get_labels(self):
         """See base class."""
-        return ["ENTAILMENT", "CONTRADICTION"]
+        return ["ENTAILMENT", "NEUTRAL", "CONTRADICTION"]
 
     def _create_examples(self, lines, set_type):
         """Creates examples for the training and dev sets."""
@@ -782,6 +782,8 @@ def compute_metrics(task_name, preds, labels):
         return {"acc": simple_accuracy(preds, labels)}
     elif task_name == "ag_tasks":
         return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "ag_polarity":
+        return {"acc": simple_accuracy(preds, labels)}
     else:
         raise KeyError(task_name)
 
@@ -844,7 +846,7 @@ def run_eval(args, task_name, eval_features, label_list, tokenizer, output_mode,
 
         eval_loss = eval_loss / nb_eval_steps
         preds = preds[0]
-        if task_name == 'ag_tasks' and num_labels == 3:
+        if 'ag' in task_name and num_labels == 3:
             preds[:, 1] = -1e10    # Set logits for NEUTRAL to large negative so they never are argmax
         if output_mode == "classification":
             preds = np.argmax(preds, axis=1)
@@ -1060,7 +1062,7 @@ def parse_args():
                         default='default', choices=['default', 'wandb'],
                         help="Type of logger to use. wandb will use weights and biases.")
     parser.add_argument('--eval_snli_dir',
-                        default='default',
+                        default=None,
                         help="Path to SNLI data to eval on addtional dataset.")
 
     ##################################
@@ -1134,7 +1136,9 @@ def main():
         args = parse_args()
 
     # Save args to file
-    dump_args(args)
+    if not os.path.exists(args.output_dir):
+        os.makedirs(args.output_dir)
+    # dump_args(args)
 
     if args.logger == 'wandb':
         wandb.init(project="test", config=args)
@@ -1186,6 +1190,7 @@ def main():
         "polarity" : "classification",
         ### AG ###
         "ag_tasks": "classification",
+        "ag_polarity": "classification",
     }
 
     ########################
@@ -1227,8 +1232,6 @@ def main():
 
     # if os.path.exists(args.output_dir) and os.listdir(args.output_dir) and args.do_train:
     #     raise ValueError("Output directory ({}) already exists and is not empty.".format(args.output_dir))
-    if not os.path.exists(args.output_dir):
-        os.makedirs(args.output_dir)
 
     #############################
     # TASK SPECIFICATION PART 2 #

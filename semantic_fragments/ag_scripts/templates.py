@@ -4,7 +4,7 @@ import json
 import csv
 import string
 from random import choice
-from utils import TemplateUtils, load_formulae
+from utils import TemplateUtils
 import pandas as pd
 
 class TemplateSampleGenerator:
@@ -14,6 +14,7 @@ class TemplateSampleGenerator:
         self.outdir = args.outdir
         self.dev_split = args.dev_split
         self.formulae_dir = args.formulae_dir
+        self.task = args.task
 
         self.generate_samples()
 
@@ -31,6 +32,7 @@ class TemplateSampleGenerator:
             for i in range(int(self.iters*self.dev_split)):
                 dev_samples.extend(self.template('dev').samples)
         else:
+            self.formulae_dir = os.path.join(self.formulae_dir, self.task.strip('propositional_'))
             dev_samples = self.template('dev', self.formulae_dir).samples
             train_samples = self.template('train', self.formulae_dir).samples
 
@@ -119,15 +121,15 @@ class PropositionalTemplate(Template):
         ''' Load datasets of propositional logic formulae and convert them
             into natural language templates.
         '''
-        df = pd.read_csv(os.path.join(self.formulae_dir, f"{self.dset}.csv"))
-        
+        df = pd.read_csv(os.path.join(self.formulae_dir, f"{self.dset}.csv")).iloc[:20, :]
         # Convert propositional formulae to natural language here.
         # First join sentence1 & sentence2 (with seperator),
         # iterate through the formula & convert to natural language
         # using templates, then split column back into sentence1
         # & sentence2
         df['sentence'] = df[['sentence1', 'sentence2']].agg(lambda x: x[0].split() + ['§§§'] + x[1].split(), axis=1)
-        df['sentence'] = df['sentence'].apply(self.convert_to_template)
+        # df['sentence'] = df['sentence'].apply(self.convert_to_template_v1)
+        df['sentence'] = df['sentence'].apply(self.convert_to_template_v2)
         df[['sentence1', 'sentence2']] = df.sentence.str.split("§§§", expand=True).applymap(lambda x: x.strip())
         df.drop('sentence', axis=1, inplace=True)
         
@@ -387,19 +389,17 @@ class Namespace:
             self.template = DisjunctionTemplate
         elif self.task.lower() == 'negation_disjunction':
             self.template = NegationDisjunctionTemplate
-        elif self.task.lower() == 'propositional':
+        elif 'propositional' in self.task.lower():
             self.template = PropositionalTemplate
 
     def configure_outdir(self):
-        assert self.task.lower() in ['negation', 'disjunction', 'negation_disjunction', 'propositional']
+        # assert self.task.lower() in ['negation', 'disjunction', 'negation_disjunction', 'propositional', 'propositional_v2']
         self.outdir = os.path.join('data', self.task)
         os.makedirs(self.outdir, exist_ok=True)
 
 
 if __name__ == '__main__':
     # for x in ['negation', 'disjunction', 'negation_disjunction']:
-    # for x in ['propositional']:
-    for x in ['negation_disjunction']:
+    for x in ['propositional_v3']:
         args = Namespace(x)
         TemplateSampleGenerator(args)
-   
