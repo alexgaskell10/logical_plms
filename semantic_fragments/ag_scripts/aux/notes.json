@@ -1,11 +1,12 @@
 
-Sentence 1                                  Sentence 1                      Label
+
+Sentence 1                                  Sentence 2                      Label
 ((i&(j>i))&((e|u)&u))                       ~(((((v&v)>i)|((i>i)|v))>v))    0
 ((~(((r|o)&r))>~(((y|a)|m)))&(y>(r>j)))     (y>(((j>j)>m)>j))               1
 
 
 
-Sentence 1                                  Sentence 1                      Label
+Sentence 1                                  Sentence 2                      Label
 i & u & (e | u) & (i | ~j)                  ~v                              0
 (r | ~a) & (r | ~m) & (r | ~y) & \          j | ~m | ~y                     1
     (o | r | ~a) & (o | r | ~m) & \
@@ -31,3 +32,13 @@ not visit Senegal or Edward did not visit Central African Republic.",
 Central African Republic.", 
     "gold_label": "ENTAILMENT"
 }
+
+
+
+{
+    "sentence1": "Raymond visited Afghanistan. Howard visited France. Carl
+visited Spain", 
+    "sentence2": "Howard visited France and Carl visited Spain.", 
+    "gold_label": "ENTAILMENT"
+}
+

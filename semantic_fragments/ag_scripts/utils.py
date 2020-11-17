@@ -7,7 +7,7 @@ import re
 import time
 import string
 
-from random import shuffle, choice, sample
+from random import shuffle, choice, sample, uniform
 from math import ceil
 from collections import OrderedDict
 import pandas as pd
@@ -291,70 +291,108 @@ class TemplateUtils:
 
         return ' '.join(kb)
 
-    def convert_to_template_v2(self, formula):
+    def convert_to_template_v2(self, formula, sep=' §§§ '):
         # Remove logical operators
-        logops = ['&', '|', '>>']
-        sep = '§§§'
         names = self.names[:]
         locs = self.locations[:]
-        # formula = '~(~m &_ c) | ~u §§§ (u >>_ ~m)'.split()
+        # formula = 's & a & p & (~(~d &_ l) | ~s) §§§ (~(~l &_ p) | ~y) & (~(~a &_ ~l) | ~p) & ((p >>_ l) | ~q)'.split()
 
-        # Create dictionary with all atoms and a name + location for each
+        # Assign a name and location to each atom
         atom_dct = {}
         for term in formula:
             atom = (set(term) & set(string.ascii_lowercase))
             if atom:
-                atom_dct[atom.pop()] = {'name': choice(names), 'loc': choice(locs)}
-        # print(atom_dct)
+                # Ensure that two atoms don't have same assignment
+                while True:
+                    item = {'name': choice(names), 'loc': choice(locs)}
+                    if item not in atom_dct.values():
+                        break
+                atom_dct[atom.pop()] = item
 
-        # Natural language template
-        name = lambda lit: atom_dct[lit.strip('~')]['name']
-        verb = lambda lit: self.neg_verb if '~' in lit else self.pos_verb
-        loc = lambda lit: atom_dct[lit.strip('~')]['loc']
-        base = lambda lit: f"{name(lit)} {verb(lit)} {loc(lit)}"
-        if_base = lambda p,q: f"if {base(p)} then {base(q)}"
+        ## Natural language template
+        # Helper units to be used by subsequent functions
+        and_aux1 = lambda: choice(["it isn't the case that", "we won't find that"])
+        and_aux2 = lambda: choice([' and ', ' but ', ', ', '. '])
+        pos_verb = lambda: choice(["has visited", "visited", "went to", "holidayed in", "spent time in"])
+        neg_verb = lambda: choice(["hasn't visited", "did not visit", "didn't go to", "hasn't holidayed in", "didn't spent time in"])
+        # Base units
+        atom = lambda p: atom_dct[p.strip('~')]
+        name = lambda p: atom(p)['name']
+        verb = lambda p: neg_verb() if '~' in p else pos_verb()
+        loc = lambda p: atom(p)['loc']
+        base = lambda p: f"{name(p)} {verb(p)} {loc(p)}"
+        # Sentences (built by combining above units)
+        if_base = lambda p,q: choice([f"if {base(p)} then {base(q)}", f"{base(q)} if {base(p)}"])
         if_unless = lambda p,q: f"{if_base(p,q)} unless"
-        or_base = lambda _: np.random.choice(["or", "unless"], 1, p=(0.9, 0.1)).item()     # Randomly choose between connectives
-        and_aux = lambda _: choice(["it isn't the case that", "we won't find that"])
-        and_base = lambda p,q: f"{and_aux('')} {base(p)} and {base(q)}"
-        and_unless = lambda p,q: f"{and_aux('')} {base(p)} and {base(q)} unless"
+        or_base = lambda _: np.random.choice(["or", "unless"], 1, p=(0.9, 0.1)).item()
+        and_neg = lambda p,q: f"{and_aux1()} {base(p)} and {base(q)}"
+        and_unless = lambda p,q: f"{and_aux1()} {base(p)} and {base(q)} unless"
+        and_base = lambda p: f"{base(p)}{and_aux2()}"
+        def and_chain(*args):
+            # Overwrite the locations of later atoms with the first atom's location
+            for m in args[1:]:
+                atom_dct[m.strip('~')] = {'name': name(m), 'loc': loc(args[0])}
+            return f"{name(args[0])}, {name(args[1])} and {base(args[2])}. "
 
-        # Regexs: match the first item and sub for second item
+        # Regexs: (m, r, p)
+        #   m: matching expression
+        #   r: replacement expression
+        #   p: probability of applying substitution
+        # ORDER MATTERS HERE
         exprs = [
-            (re.compile(r"\((~?[a-z])_ >>_ (~?[a-z])_\) \|"), if_unless),
-            (re.compile(r"\((~?[a-z])_ >>_ (~?[a-z])_\)"), if_base),
-            (re.compile(r"~\((~?[a-z])_ &_ (~?[a-z])_\) \|"), and_unless),
-            (re.compile(r"~\((~?[a-z])_ &_ (~?[a-z])_\)"), and_base),
-            (re.compile(r"(~?[a-z])_"), base),
-            (re.compile(r"(\|)"), or_base),
+            (re.compile(r"([^~][a-z])_ \+ "*3), and_chain, 0.5),   # {p, q, r, ...}
+            (re.compile(r"(~[a-z])_ \+ "*3), and_chain, 0.5),   # {~p, ~q, ~r, ...}
+            (re.compile(r"\((~?[a-z])_ >>_ (~?[a-z])_\) \|"), if_unless, 1.0),   # {(p -> q | r ...), ....}
+            (re.compile(r"\((~?[a-z])_ >>_ (~?[a-z])_\)"), if_base, 1.0),    # {p -> q, ....}
+            (re.compile(r"~\((~?[a-z])_ &_ (~?[a-z])_\) \|"), and_unless, 1.0),  # {(~(p & q) | r ...), ...}
+            (re.compile(r"~\((~?[a-z])_ &_ (~?[a-z])_\)"), and_neg, 1.0),    # {~(p & q), ...}
+            (re.compile(r"(~?[a-z])_ \+ "), and_base, 1.0),   # {p, ...}
+            (re.compile(r"(~?[a-z])_"), base, 1.0),  # {p, ...}
+            (re.compile(r"(\|)"), or_base, 1.0),     # {(p | q ...), ...}
         ]
 
-        # Preprocessing
-        formula = _formula = ' '.join(formula)
-        formula = re.sub(r"([a-z])", r"\1_", formula)
-        formula = re.sub(r"~~", r"", formula)
-        formula = re.sub(r"\((\([^\)]+\))\)", r"\1", formula)
-        # formula = formula.split(' & ')
-        # formula = ' & '.join(formula)
-
-        sub_func = lambda m: exp[1](*map(lambda i: m.group(i+1), range(len(m.groups()))))
+        if True:
+            # Preprocessing
+            formula = _formula = ' '.join(formula)
+            formula = formula.replace(' & ', ' + ')
+            # Reorder so that negated / positive literals are consecutive
+            formula = [f.split(' + ') for f in formula.split(sep)]
+            formula = __formula = ' + '.join(sorted(formula[0], reverse=True)) + f" {sep} " + ' + '.join(sorted(formula[1], reverse=True))
+            # print(_formula, '\t', formula)
+            formula = re.sub(r"([a-z])", r"\1_", formula)
+            formula = re.sub(r"~~", r"", formula)
+            formula = re.sub(r"\((\([^\)]+\))\)", r"\1", formula)
+            
+        # Perform conversion:
+        # use regex to identify subformulae and convert these to language
+        # using above templates
+        def sub_func(_):
+            atom = matches.pop(0)
+            if isinstance(atom ,tuple):
+                return exp[1](*atom)
+            else:
+                return exp[1](atom)
         for exp in exprs:
-            formula = re.sub(exp[0], sub_func, formula)
-            # formula = apply_str_sub(formula, exp)
+            if uniform(0,1) < exp[2]:
+                matches = re.findall(exp[0], formula)
+                formula = re.sub(exp[0], sub_func, formula)
 
-        formula = formula.split(' & ')
-        # Post-processing
-        formula = [re.sub(r"\(([^\)]+)\)", r"\1", f) for f in formula]  # Remove brackets
-        formula = [f[0].upper() + f[1:] for f in formula]   # Uppercase first word
-        formula = [re.sub(r" §§§ ([a-z])", lambda m: r". §§§ " + m.group(1).upper(), f) for f in formula]     # Fullstop after first sentence and uppercase first letter of second sentence.
-        if len(formula) > 2:
-            i = choice(range(1, len(formula)-1))
-            formula = '. '.join([' and '.join(['. '.join(formula[:i])] + formula[i:i+1])] + formula[i+1:])
-        else:
-            formula = '. '.join(formula)
-        
-        assert not re.search('_', formula), f"Failed for {_formula}"
+        if True:
+            # Post-processing
+            formula = formula.split(' + ')
+            formula_tmp = [re.sub(r"\(([^\)]+)\)", r"\1", f) for f in formula]  # Remove brackets
+            # Join clauses together with randomly selected connectives
+            formula = formula_tmp[0]
+            for f in formula_tmp[1:]:
+                formula += f" {and_aux2()} {f} "
+            formula = re.sub(r"\s+", " ", formula).strip() + '.'
+            formula = re.sub(r" (,|\.) ", r"\1 ", formula)
+            formula = re.sub(fr"\.?{sep}([a-zA-Z])", lambda m: fr". {sep} " + m.group(1).upper(), formula) # Fullstop after first sentence and uppercase first letter of second sentence.
+            formula = re.sub(fr"\. ([a-z])", lambda m: fr". {m.group(1).upper()}", formula) # Capitalize after fullstop
 
+        assert not re.search(r'_|\(|\)|\+', formula), f"Haven't fully converted the template to language. Failed for: \n{_formula} \n{formula}"
+
+        # print(_formula, '\n', __formula, '\n', formula, '\n\n')
         return formula
 
     @staticmethod
@@ -426,24 +464,17 @@ if __name__ == '__main__':
 
     # TemplateUtils.list_clauses(os.path.join(path, 'v2/dev.csv'))
 
-
-        # def apply_str_sub(formula: list, exp: tuple):
-        #     ''' Helper to apply string subsitutions using regex.
-        #     '''
-        #     def f(match):
-        #         print(len(match.groups()))
-        #         # print(re.compile(r"\((~?[a-z])_ [^\s]+ (~?[a-z])_\)").groups)
-        #         # print(match.group(1), match.group(2))
-        #         return ""
-        #     re.sub(r"\((~?[a-z])_ [^\s]+ (~?[a-z])_\)", f, ' & '.join(formula))
-        #     sys.exit()
-        #     if re.search(exp[0], ' '.join(formula)):    # Skip if pattern not in string
-        #         for n,_ in enumerate(formula):
-        #             if re.search(exp[0], formula[n]):   # Check if pattern in term
-        #                 # Apply substitution to atoms in term
-        #                 for literals in re.findall(exp[0], formula[n]):
-        #                     if isinstance(literals, tuple):
-        #                         formula[n] = re.sub(exp[0], exp[1](*literals), formula[n], 1)
-        #                     else:
-        #                         formula[n] = re.sub(exp[0], exp[1](literals), formula[n], 1)
-        #     return formula
+    # def apply_str_sub(formula: list, exp: tuple):
+    # ''' Helper to apply string subsitutions using regex.
+    # '''
+    # if re.search(exp[0], ' '.join(formula)):    # Skip if pattern not in string
+    #     for n,_ in enumerate(formula):
+    #         if re.search(exp[0], formula[n]):   # Check if pattern in term
+    #             # Apply substitution to atoms in term
+    #             for literals in re.findall(exp[0], formula[n]):
+    #                 if isinstance(literals, tuple):
+    #                     formula[n] = re.sub(exp[0], exp[1](*literals), formula[n], 1)
+    #                 else:
+    #                     formula[n] = re.sub(exp[0], exp[1](literals), formula[n], 1)
+    # return formula
+    # formulae = apply_str_sub(formula, exp)

@@ -1,14 +1,13 @@
 import sys
 import json
-
-from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-from pytorch_pretrained_bert.modeling import BertForSequenceClassification, BertConfig, WEIGHTS_NAME, CONFIG_NAME
-from pytorch_pretrained_bert.tokenization import BertTokenizer
-from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
-
 import pandas as pd
 import numpy as np
 import torch
+
+# from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
+# from pytorch_pretrained_bert.modeling import BertForSequenceClassification, BertConfig, WEIGHTS_NAME, CONFIG_NAME
+# from pytorch_pretrained_bert.tokenization import BertTokenizer
+# from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
 
 # from sklearn.metrics import confusion_matrix
 
@@ -79,8 +78,16 @@ import re
 # verb = lambda lit: self.pos_verb if "~" in lit else self.neg_verb
 # t1 = lambda x,y: f"if {x[0].strip('~')} {verb()} {x[1].strip('~')} then {y[0].strip('~')} {verb()} {y[1].strip('~')} unless"
 # ex1 = re.compile(r"\((~?[a-z]) [^\s]+ (~?[a-z])\) \|")
-f = 'end §§§ if'
-print(re.sub(r" §§§ ([a-z])", lambda m: r". §§§ " + m.group(1).upper(), f))
+f = 'p_ & q_ & r_ & ~p_ & q_ & ~r_ & ~p_ & ~q_ & ~r_ & (p >>_ q) & s_ & t_'
+# s = re.sub(r"(~?[a-z])_ & (~?[a-z]_)", lambda match: print(match.groups()), f)
+# s = re.sub(r"(~?[a-z])_ & ", lambda m: print(m.groups()), f)
+s = re.findall(r"(~[a-z])_ & "*3, f)
+print(s)
+
+# print(re.compile(r"(~?[a-z])_(?: & (~?[a-z])_)+").groups)
+# print(re.search(r"(~?[a-z])_(?: & (~?[a-z])_)+", f).groups())
+# print(re.findall(r"(~?[a-z])_(?: & (~?[a-z])_)+", f))
+# print(re.findall(r"([a-z])_ & ([a-z])_", f))
 
 # Connectives: or/unless; and/but
 # ((o >> r) | ~m): if john doesn't visit spain then mark visits portugal or james doesn't visit france
