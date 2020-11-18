@@ -6,3 +6,7 @@
 
 149: proplog data v2
 150: proplog data v1
+153: raw prop formulae (proplog/v3)
+
+151: prop templates v2 (more complex templates)
+152: prop templates v3 (more complex templates)

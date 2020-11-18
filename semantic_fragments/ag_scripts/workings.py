@@ -1,13 +1,22 @@
 import sys
 import json
+import os
 import pandas as pd
 import numpy as np
 import torch
+import torch.nn.functional as F
 
-# from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
-# from pytorch_pretrained_bert.modeling import BertForSequenceClassification, BertConfig, WEIGHTS_NAME, CONFIG_NAME
-# from pytorch_pretrained_bert.tokenization import BertTokenizer
-# from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
+if False:
+    path = '/vol/bitbucket/aeg19/logical_plms/semantic_fragments/generate_challenge/brazil_fragments/counting/test/challenge_dev.tsv'
+    df = pd.read_csv(path, header=None, sep='\t')
+    df.columns = ['id', 'sentence1', 'sentence2', 'label']
+    df = df.loc[df.label != 'NEUTRAL', :]
+    print(df.label.value_counts())
+
+from pytorch_pretrained_bert.file_utils import PYTORCH_PRETRAINED_BERT_CACHE
+from pytorch_pretrained_bert.modeling import BertForSequenceClassification, BertConfig, WEIGHTS_NAME, CONFIG_NAME
+from pytorch_pretrained_bert.tokenization import BertTokenizer
+from pytorch_pretrained_bert.optimization import BertAdam, warmup_linear
 
 # from sklearn.metrics import confusion_matrix
 
@@ -35,67 +44,84 @@ import torch
 #     res.to_csv(f'/vol/bitbucket/aeg19/logical_plms/semantic_fragments/ag_scripts/data/proplog/v1/challenge_{ext}.tsv', sep='\t', header=None)
 
 
-# #### Trained model below
-# config = BertConfig('/vol/bitbucket/aeg19/logical_plms/semantic_fragments/_experiments/propositional_v2/bert_config.json')
-# model = BertForSequenceClassification(config, num_labels=3)
-# model.load_state_dict(torch.load('/vol/bitbucket/aeg19/logical_plms/semantic_fragments/_experiments/propositional_v2/pytorch_model.bin'))
-# model.eval()
-# tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+#### Trained model below
+d = '/vol/bitbucket/aeg19/logical_plms/semantic_fragments/_experiments/proplog/v3/'
+# d = '/vol/bitbucket/aeg19/logical_plms/semantic_fragments/_experiments/propositional_v3/'
+config = BertConfig(os.path.join(d, 'bert_config.json'))
+model = BertForSequenceClassification(config, num_labels=3)
+model.load_state_dict(torch.load(os.path.join(d, 'pytorch_model.bin')))
+model.eval()
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
 
-# # kb = 'If Todd did not visit Mauritania then Dan visited South Africa. If Fernando did not visit United Arab Emirates then Todd visited Mauritania unless Dan visited South Africa. Bobby visited Mauritania'
-# # hyp = 'if Fernando did not visit United Arab Emirates then Fernando did not visit United Arab Emirates. If Benjamin did not visit Peru then Jack visited China unless Sergio visited Sri Lanka or Bobby did not visit Mauritania or Dan did not visit South Africa unless Sergio did not visit Sri Lanka. Bobby visited Mauritania or Fernando visited United Arab Emirates'
-# # 'ENTAILMENT', False
+# kb = "Edgar, Mark and Jane visited Luxembourg. Edgar, Jane and Mark didn't visit Luxembourg if John visited France. John visited France."
+# hyp = "Jane visited Luxembourg."
+equivs = [
+    # 1
+    ['(p&q)','(q&p)', True],
+    ['(p&q)','~(p&q)', False],
+    ['(p&q)','(~(p)&q)', False],
+    # 21
+    ['(p>q)','(~(p)|q)', True],
+    ['(p>q)','(~(p)|~(q))', False],
+    ['(p>q)','(p|q)', False],
+    ['(p>q)','~(~(p)|q)', False],
+    # 22
+    ['(p>q)','~(p&~(q))', True],
+    ['(p>q)','~(~(p)&~(q))', False],
+    ['(p>q)','(p&~(q))', False],
+    ['(p>q)','~(p&q)', False],
+    # 23
+    ['~(p>q)','(p&~(q))', True],
+    ['~(p>q)','(~(p)&~(q))', False],
+    ['~(p>q)','~(p&~(q))', False],
+    ['~(p>q)','(p&q)', False],
+]
+# equivs = [
+#     # ["John visited France and Jane visited Spain.", "John didn't visited France and Jane visited Spain.", False],
+#     ["If John visited France then Jane visited Spain.", "John didn't visit France or Jane visited Spain.", False],
+#     ["If John visited France then Jane visited Spain.", "John didn't visit France or Jane didn't visit Spain.", False],
+#     ["If John visited France then Jane visited Spain.", "John visited France or Jane visited Spain.", False],
+#     ["If John visited France then Jane visited Spain.", "It isn't the case that John didn't visit France or Jane visited Spain.", False],
+# ]
+for e in equivs:
+    kb, hyp, label = e
+    sent_1 = tokenizer.tokenize(kb)
+    sent_2 = tokenizer.tokenize(hyp)
+    tok = tok_ = ['[CLS]'] + sent_1 + ['[SEP]'] + sent_2 + ['[SEP]']
+    tok = tokenizer.convert_tokens_to_ids(tok)
+    seg = [0]*(len(sent_1)+2) + [1]*(len(sent_2)+1) + [0]*(128 - len(tok))
+    tok += [0]*(128 - len(tok))
+    mask = [0 if t==0 else 1 for t in tok]
 
-# kb = "Jenny has not visited Panama. Danielle has visited Kuwait. Kimberly has visited Saint Lucia. if Kimberly has visited Saint Lucia then Diane has visited Tanzania"
-# hyp = "Diane has visited Tanzania"
-
-# sent_1 = tokenizer.tokenize(kb)
-# sent_2 = tokenizer.tokenize(hyp)
-# tok = ['[CLS]'] + sent_1 + ['[SEP]'] + sent_2 + ['[SEP]']
-# tok = tokenizer.convert_tokens_to_ids(tok)
-# seg = [0]*(len(sent_1)+2) + [1]*(len(sent_2)+1) + [0]*(128 - len(tok))
-# tok += [0]*(128 - len(tok))
-# mask = [0 if t==0 else 1 for t in tok]
-
-# x = torch.tensor(tok).unsqueeze(0)
-# msk = torch.tensor(mask).unsqueeze(0)
-# seg = torch.tensor(seg).unsqueeze(0)
-# logits = model(x, seg, msk).squeeze()
-# print(f'Length: {len(tok)}\t|\tFALSE: {logits[-1]:.3f}\t|\tTRUE: {logits[0]:.3f}')
+    x = torch.tensor(tok).unsqueeze(0)
+    msk = torch.tensor(mask).unsqueeze(0)
+    seg = torch.tensor(seg).unsqueeze(0)
+    logits = model(x, seg, msk).squeeze()
+    probs = F.softmax(logits, dim=0)
+    print(f'Length: {len(tok_)}\t|\tFALSE: {logits[-1]:.3f}\t|\tTRUE: {logits[0]:.3f}',
+        f'\t|\tP(TRUE): {probs[0]:.3f}',
+        f'\t|\tLabel: {label}')
 
 
-from sympy.core import symbols
-from sympy.logic.boolalg import to_cnf, Equivalent
-from sympy.logic import simplify_logic
-from sympy import solve, bool_map
+# from sympy.core import symbols
+# from sympy.logic.boolalg import to_cnf, Equivalent
+# from sympy.logic import simplify_logic
+# from sympy import solve, bool_map
 
-### Regex substitions
-import re
+# ### Regex substitions
+# import re
 
-# s = "((~o >>_ r) | ~y) & ((~o >>_ r) | ~m)"
-# x = ('John', 'Spain')
-# y = ('Mark', 'France')
-# verb = lambda lit: self.pos_verb if "~" in lit else self.neg_verb
-# t1 = lambda x,y: f"if {x[0].strip('~')} {verb()} {x[1].strip('~')} then {y[0].strip('~')} {verb()} {y[1].strip('~')} unless"
-# ex1 = re.compile(r"\((~?[a-z]) [^\s]+ (~?[a-z])\) \|")
-f = 'p_ & q_ & r_ & ~p_ & q_ & ~r_ & ~p_ & ~q_ & ~r_ & (p >>_ q) & s_ & t_'
-# s = re.sub(r"(~?[a-z])_ & (~?[a-z]_)", lambda match: print(match.groups()), f)
-# s = re.sub(r"(~?[a-z])_ & ", lambda m: print(m.groups()), f)
-s = re.findall(r"(~[a-z])_ & "*3, f)
-print(s)
+# f = 'p_ & q_ & r_ & ~p_ & q_ & ~r_ & ~p_ & ~q_ & ~r_ & (p >>_ q) & s_ & t_'
+# s = re.findall(r"(~[a-z])_ & "*3, f)
+# print(s)
 
-# print(re.compile(r"(~?[a-z])_(?: & (~?[a-z])_)+").groups)
-# print(re.search(r"(~?[a-z])_(?: & (~?[a-z])_)+", f).groups())
-# print(re.findall(r"(~?[a-z])_(?: & (~?[a-z])_)+", f))
-# print(re.findall(r"([a-z])_ & ([a-z])_", f))
 
-# Connectives: or/unless; and/but
-# ((o >> r) | ~m): if john doesn't visit spain then mark visits portugal or james doesn't visit france
-# (~(~g & ~y) | ~z): (it isnt the case that / we won't find that) john and jane dont visit spain or frank doesnt visits portugal
-# (~(~p & ~t) | (p >> v)): it isnt the case that john and jane dont visit spain unless if mark visits france then peter visits belgium
-# ((o >> r) | (~p >> ~t)):
+# in_dir = '/vol/bitbucket/aeg19/logical_plms/semantic_fragments/ag_scripts/data/logical-entailment-dataset'
+# out_dir = '/vol/bitbucket/aeg19/logical_plms/semantic_fragments/ag_scripts/data/proplog/v3'
 
-# ~: doesn't visit; won't visit
-# |: or/unless
-# &: and/but
-# >>: if a then b/b if a
+# names = [('train.txt', 'challenge_train.tsv'), ('validate.txt', 'challenge_dev.tsv')]
+# for i in [0, 1]:
+#     df = pd.read_csv(os.path.join(in_dir, names[i][0]), header=None)
+#     df = df.iloc[:, :3]
+#     df.iloc[:, -1] = df.iloc[:, -1].map({0: 'CONTRADICTION', 1: 'ENTAILMENT'})
+#     df.to_csv(os.path.join(out_dir, names[i][1]), sep='\t', header=None)

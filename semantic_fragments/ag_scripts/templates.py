@@ -121,7 +121,9 @@ class PropositionalTemplate(Template):
         ''' Load datasets of propositional logic formulae and convert them
             into natural language templates.
         '''
-        df = pd.read_csv(os.path.join(self.formulae_dir, f"{self.dset}.csv")).iloc[70:100, :]
+        source = os.path.join(self.formulae_dir, f"{self.dset}.csv")
+        print(f'Processing formulae. Reading from:\n{source}\n')
+        df = pd.read_csv(source)#.iloc[70:100, :]
 
         # Convert propositional formulae to natural language here.
         # First join sentence1 & sentence2 (with seperator),
