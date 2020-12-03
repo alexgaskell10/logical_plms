@@ -291,48 +291,63 @@ class TemplateUtils:
 
         return ' '.join(kb)
 
-    def convert_to_template_v2(self, formula, sep=' §§§ '):
+    def convert_to_template_v2(self, formula, sep=' §§§ ', generic=False):
         # Remove logical operators
         names = self.names[:]
         locs = self.locations[:]
         # formula = 's & a & p & (~(~d &_ l) | ~s) §§§ (~(~l &_ p) | ~y) & (~(~a &_ ~l) | ~p) & ((p >>_ l) | ~q)'.split()
 
+        # Preprocessing
+        if True:
+            formula = _formula = ' '.join(formula)
+            formula = formula.replace(' & ', ' + ')
+            # Reorder so that negated / positive literals are consecutive
+            formula = [f.split(' + ') for f in formula.split(sep)]
+            formula = __formula = ' + '.join(sorted(formula[0], reverse=True)) + f" {sep} " + ' + '.join(sorted(formula[1], reverse=True))
+
         # Assign a name and location to each atom
+        index = 0
         atom_dct = {}
         for term in formula:
             atom = (set(term) & set(string.ascii_lowercase))
-            if atom:
-                # Ensure that two atoms don't have same assignment
-                while True:
-                    item = {'name': choice(names), 'loc': choice(locs)}
-                    if item not in atom_dct.values():
-                        break
-                atom_dct[atom.pop()] = item
+            if atom and list(atom)[0] not in atom_dct:
+                if generic:
+                    item = {'name': f'person-{index}', 'loc': f'location-{index}'}
+                    atom_dct[atom.pop()] = item
+                    index += 1
+                else:                    
+                    # Ensure that two atoms don't have same assignment
+                    while True:
+                        item = {'name': choice(names), 'loc': choice(locs)}
+                        if item not in atom_dct.values():
+                            break
+                    atom_dct[atom.pop()] = item
 
         ## Natural language template
         # Helper units to be used by subsequent functions
-        and_aux1 = lambda: choice(["it isn't the case that", "we won't find that"])
-        and_aux2 = lambda: choice([' and ', ' but ', ', ', '. '])
-        pos_verb = lambda: choice(["has visited", "visited", "went to", "holidayed in", "spent time in"])
-        neg_verb = lambda: choice(["hasn't visited", "did not visit", "didn't go to", "hasn't holidayed in", "didn't spent time in"])
-        # Base units
-        atom = lambda p: atom_dct[p.strip('~')]
-        name = lambda p: atom(p)['name']
-        verb = lambda p: neg_verb() if '~' in p else pos_verb()
-        loc = lambda p: atom(p)['loc']
-        base = lambda p: f"{name(p)} {verb(p)} {loc(p)}"
-        # Sentences (built by combining above units)
-        if_base = lambda p,q: choice([f"if {base(p)} then {base(q)}", f"{base(q)} if {base(p)}"])
-        if_unless = lambda p,q: f"{if_base(p,q)} unless"
-        or_base = lambda _: np.random.choice(["or", "unless"], 1, p=(0.9, 0.1)).item()
-        and_neg = lambda p,q: f"{and_aux1()} {base(p)} and {base(q)}"
-        and_unless = lambda p,q: f"{and_aux1()} {base(p)} and {base(q)} unless"
-        and_base = lambda p: f"{base(p)}{and_aux2()}"
-        def and_chain(*args):
-            # Overwrite the locations of later atoms with the first atom's location
-            for m in args[1:]:
-                atom_dct[m.strip('~')] = {'name': name(m), 'loc': loc(args[0])}
-            return f"{name(args[0])}, {name(args[1])} and {base(args[2])}. "
+        if True:
+            and_aux1 = lambda: choice(["it isn't the case that", "we won't find that"])
+            and_aux2 = lambda: choice([' and ', ' but ', ', ', '. '])
+            pos_verb = lambda: choice(["has visited", "visited", "went to", "holidayed in", "spent time in"])
+            neg_verb = lambda: choice(["hasn't visited", "did not visit", "didn't go to", "hasn't holidayed in", "didn't spent time in"])
+            # Base units
+            atom = lambda p: atom_dct[p.strip('~')]
+            name = lambda p: atom(p)['name']
+            verb = lambda p: neg_verb() if '~' in p else pos_verb()
+            loc = lambda p: atom(p)['loc']
+            base = lambda p: f"{name(p)} {verb(p)} {loc(p)}"
+            # Sentences (built by combining above units)
+            if_base = lambda p,q: choice([f"if {base(p)} then {base(q)}", f"{base(q)} if {base(p)}"])
+            if_unless = lambda p,q: f"{if_base(p,q)} unless"
+            or_base = lambda _: np.random.choice(["or", "unless"], 1, p=(0.9, 0.1)).item()
+            and_neg = lambda p,q: f"{and_aux1()} {base(p)} and {base(q)}"
+            and_unless = lambda p,q: f"{and_aux1()} {base(p)} and {base(q)} unless"
+            and_base = lambda p: f"{base(p)}{and_aux2()}"
+            def and_chain(*args):
+                # Overwrite the locations of later atoms with the first atom's location
+                for m in args[1:]:
+                    atom_dct[m.strip('~')] = {'name': name(m), 'loc': loc(args[0])}
+                return f"{name(args[0])}, {name(args[1])} and {base(args[2])}. "
 
         # Regexs: (m, r, p)
         #   m: matching expression
@@ -351,14 +366,8 @@ class TemplateUtils:
             (re.compile(r"(\|)"), or_base, 1.0),     # {(p | q ...), ...}
         ]
 
+        # Preprocessing
         if True:
-            # Preprocessing
-            formula = _formula = ' '.join(formula)
-            formula = formula.replace(' & ', ' + ')
-            # Reorder so that negated / positive literals are consecutive
-            formula = [f.split(' + ') for f in formula.split(sep)]
-            formula = __formula = ' + '.join(sorted(formula[0], reverse=True)) + f" {sep} " + ' + '.join(sorted(formula[1], reverse=True))
-            # print(_formula, '\t', formula)
             formula = re.sub(r"([a-z])", r"\1_", formula)
             formula = re.sub(r"~~", r"", formula)
             formula = re.sub(r"\((\([^\)]+\))\)", r"\1", formula)
@@ -377,8 +386,8 @@ class TemplateUtils:
                 matches = re.findall(exp[0], formula)
                 formula = re.sub(exp[0], sub_func, formula)
 
+        # Post-processing
         if True:
-            # Post-processing
             formula = formula.split(' + ')
             formula_tmp = [re.sub(r"\(([^\)]+)\)", r"\1", f) for f in formula]  # Remove brackets
             # Join clauses together with randomly selected connectives
@@ -390,7 +399,8 @@ class TemplateUtils:
             formula = re.sub(fr"\.?{sep}([a-zA-Z])", lambda m: fr". {sep} " + m.group(1).upper(), formula) # Fullstop after first sentence and uppercase first letter of second sentence.
             formula = re.sub(fr"\. ([a-z])", lambda m: fr". {m.group(1).upper()}", formula) # Capitalize after fullstop
 
-        assert not re.search(r'_|\(|\)|\+', formula), f"Haven't fully converted the template to language. Failed for: \n{_formula} \n{formula}"
+        assert not re.search(r'_|\(|\)|\+', formula), (
+            f"Haven't fully converted the template to language. Failed for: \n{_formula} \n{formula}")
 
         # print(_formula, '\n', __formula, '\n', formula, '\n\n')
         return formula

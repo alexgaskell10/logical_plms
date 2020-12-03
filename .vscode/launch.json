@@ -5,14 +5,25 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Python: Current File",
+            "name": "Python: ag_scripts",
             "type": "python",
             "request": "launch",
             "program": "${file}",
             "console": "integratedTerminal",
             "python": "/vol/bitbucket/aeg19/.envs/semfrags/bin/python",
-            "justMyCode": false,
+            "justMyCode": true,
             "cwd": "/vol/bitbucket/aeg19/logical_plms/semantic_fragments"
+        },
+        {
+            "name": "Python: ruletaker",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "python": "/vol/bitbucket/aeg19/.envs/ruletaker/bin/python",
+            "justMyCode": false,
+            "cwd": "/vol/bitbucket/aeg19/ruletaker"
         }
+
     ]
 }

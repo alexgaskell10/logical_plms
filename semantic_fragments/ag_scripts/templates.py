@@ -32,7 +32,7 @@ class TemplateSampleGenerator:
             for i in range(int(self.iters*self.dev_split)):
                 dev_samples.extend(self.template('dev').samples)
         else:
-            self.formulae_dir = os.path.join(self.formulae_dir, self.task.strip('propositional_'))
+            self.formulae_dir = os.path.join(self.formulae_dir, self.task.replace('propositional_', ''))
             dev_samples = self.template('dev', self.formulae_dir).samples
             train_samples = self.template('train', self.formulae_dir).samples
 
@@ -121,9 +121,9 @@ class PropositionalTemplate(Template):
         ''' Load datasets of propositional logic formulae and convert them
             into natural language templates.
         '''
-        source = os.path.join(self.formulae_dir, f"{self.dset}.csv")
+        source = os.path.join(self.formulae_dir[:-1], f"{self.dset}.csv")
         print(f'Processing formulae. Reading from:\n{source}\n')
-        df = pd.read_csv(source)#.iloc[70:100, :]
+        df = pd.read_csv(source)#.iloc[:20, :]
 
         # Convert propositional formulae to natural language here.
         # First join sentence1 & sentence2 (with seperator),
@@ -131,8 +131,7 @@ class PropositionalTemplate(Template):
         # using templates, then split column back into sentence1
         # & sentence2
         df['sentence'] = df[['sentence1', 'sentence2']].agg(lambda x: x[0].split() + ['§§§'] + x[1].split(), axis=1)
-        # df['sentence'] = df['sentence'].apply(self.convert_to_template_v1)
-        df['sentence'] = df['sentence'].apply(self.convert_to_template_v2)
+        df['sentence'] = df['sentence'].apply(self.convert_to_template_v2, generic=True)
         df[['sentence1', 'sentence2']] = df.sentence.str.split("§§§", expand=True).applymap(lambda x: x.strip())
         df.drop('sentence', axis=1, inplace=True)
         
@@ -144,8 +143,8 @@ class PropositionalTemplate(Template):
         df['captionID'] = df.pairID.map(lambda x: f'c-{x}')      
 
         # Drop rows with tokens > bert's limit
-        len_flag = (df['sentence1'].str.split().apply(len) + df['sentence2'].str.split().apply(len)) <= 400
-        df = df[len_flag]
+        # len_flag = (df['sentence1'].str.split().apply(len) + df['sentence2'].str.split().apply(len)) <= 400
+        # df = df[len_flag]
 
         self.samples = df.to_dict('records')
 
@@ -403,6 +402,6 @@ class Namespace:
 
 if __name__ == '__main__':
     # for x in ['negation', 'disjunction', 'negation_disjunction']:
-    for x in ['propositional_v3']:
+    for x in ['propositional_v3a']:
         args = Namespace(x)
         TemplateSampleGenerator(args)

@@ -91,4 +91,5 @@ wandb
 generate_challenge
 data
 data_mcqa
+lightning_logs
 
