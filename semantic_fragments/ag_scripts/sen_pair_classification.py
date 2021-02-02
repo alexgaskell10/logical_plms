@@ -8,6 +8,7 @@ import os
 import random
 import sys
 import numpy as np
+import pandas as pd
 import torch
 from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
                               TensorDataset)
@@ -15,7 +16,8 @@ from torch.utils.data import (DataLoader, RandomSampler, SequentialSampler,
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
-from torch.nn import CrossEntropyLoss, MSELoss
+from torch.nn import CrossEntropyLoss, MSELoss, BCEWithLogitsLoss
+from torch import nn
 from scipy.stats import pearsonr, spearmanr
 from sklearn.metrics import matthews_corrcoef, f1_score
 
@@ -57,11 +59,12 @@ class InputExample(object):
 class InputFeatures(object):
     """A single set of features of data."""
 
-    def __init__(self, input_ids, input_mask, segment_ids, label_id):
+    def __init__(self, input_ids, input_mask, segment_ids, label_id, guid=None):
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
         self.label_id = label_id
+        self.guid = guid
 
 
 class DataProcessor(object):
@@ -114,6 +117,69 @@ class AGProcessor(DataProcessor):
         return ["ENTAILMENT", "CONTRADICTION"]
 
     def _create_examples(self, lines, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        for (i, line) in enumerate(lines):
+            guid = line[0] #"%s-%s" % (set_type, line[0])
+            text_a = line[1]
+            text_b = line[2]
+            label = line[3]
+            examples.append(
+                InputExample(guid=guid, text_a=text_a, text_b=text_b, label=label))
+        return examples    
+
+
+class RuleTakerProcessor(DataProcessor):
+    """Processor for AG sythetic disjunction dataset. """
+    def load_from_file(self, dset, data_dir):
+        self.exclude_pat = ['birds-electricity', 'NatLang', 'ext']
+        # Obtain list of files to load
+        files = []
+        for (dir, _, filenames) in os.walk(data_dir):
+            if any(pat in dir for pat in self.exclude_pat):
+                continue
+            for file in filenames:
+                if file == dset+'.jsonl':
+                   files.append(os.path.join(dir, file))
+
+        # Load json data from file
+        data = []
+        for file in files:
+            for line in open(file).readlines():
+                row = json.loads(line)
+                for q in row['questions']:
+                    sample = {'context':row['context'], **q}
+                    for k,v in sample.pop('meta').items():
+                        sample['meta.'+k] = v
+                    data.append(sample)        
+
+        # Convert to pd dataframe
+        df = pd.DataFrame(data)
+        df['cid'] = df.id.apply(lambda id: '-'.join(id.split('-')[:-1]))
+        # if dset == 'dev':
+        #     df = df.iloc[:1000]                                                     # TODO
+        # else:
+        #     df = df.iloc[np.random.choice(len(df), len(df), replace=False)].reset_index(drop=True)                           # TODO
+
+        df = df[['id', 'context', 'text', 'label']]
+        df.to_csv('/vol/bitbucket/aeg19/re-re/data/rule-reasoning-dataset-V2020.2.4/tmp.csv')
+        return df.values
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self.load_from_file('train', data_dir))
+
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self.load_from_file('dev', data_dir))
+
+    def get_labels(self):
+        """See base class."""
+        return [True, False]
+
+    def _create_examples(self, lines, set_type=None):
         """Creates examples for the training and dev sets."""
         examples = []
         for (i, line) in enumerate(lines):
@@ -714,7 +780,8 @@ def convert_examples_to_features(examples, label_list, max_seq_length,
                 InputFeatures(input_ids=input_ids,
                               input_mask=input_mask,
                               segment_ids=segment_ids,
-                              label_id=label_id))
+                              label_id=label_id,
+                              guid=example.guid))
     return features
 
 def _truncate_seq_pair(tokens_a, tokens_b, max_length):
@@ -784,6 +851,8 @@ def compute_metrics(task_name, preds, labels):
         return {"acc": simple_accuracy(preds, labels)}
     elif task_name == "ag_polarity":
         return {"acc": simple_accuracy(preds, labels)}
+    elif task_name == "ruletaker":
+        return {"acc": simple_accuracy(preds, labels)}
     else:
         raise KeyError(task_name)
 
@@ -793,7 +862,6 @@ def run_eval(args, task_name, eval_features, label_list, tokenizer, output_mode,
     ########################
 
     if args.do_eval and (args.local_rank == -1 or torch.distributed.get_rank() == 0):
-
         #############################
         # ### SPECIAL CASE FOR SICK #
         #############################
@@ -858,12 +926,13 @@ def run_eval(args, task_name, eval_features, label_list, tokenizer, output_mode,
 
         result['eval_loss'] = eval_loss
         result['global_step'] = global_step
-        result['loss'] = loss
+        result['eval_acc'] = result['acc']
+        # result['loss'] = loss
         
         if args.logger == 'wandb':
             if snli:
                 result = {'snli_acc': result['acc']}
-            wandb.log(result)
+            wandb.log({k:v for k,v in result.items() if k in ['eval_loss','global_step','eval_acc']})
 
         output_eval_file = os.path.join(args.output_dir, "eval_results.txt")
         with open(output_eval_file, "w") as writer:
@@ -887,7 +956,6 @@ def run_eval(args, task_name, eval_features, label_list, tokenizer, output_mode,
                 for key in sorted(result.keys()):
                     writer.write("%s = %s\n" % (key, str(result[key])))
                 writer.write(json.dumps(summary))
-
 
         # hack for MNLI-MM
         if task_name == "mnli":
@@ -1131,7 +1199,7 @@ def main():
     if len(sys.argv) == 1:  # Hack to flag if being called from debugger
         sys.path.append('.')
         from ag_scripts.utils import dump_args, load_args
-        args = load_args('./ag_scripts/aux/set_2.txt')
+        args = load_args('./ag_scripts/aux/set_3.txt')
     else:
         args = parse_args()
 
@@ -1174,6 +1242,7 @@ def main():
         ### AG ###
         "ag_tasks": AGProcessor,
         "ag_polarity": AGPolarityProcessor,
+        "ruletaker": RuleTakerProcessor,
     }
 
     output_modes = {
@@ -1191,6 +1260,7 @@ def main():
         ### AG ###
         "ag_tasks": "classification",
         "ag_polarity": "classification",
+        "ruletaker": "classification",
     }
 
     ########################
@@ -1420,6 +1490,7 @@ def main():
         total_loss = 0
         for epoch in trange(int(args.num_train_epochs), desc="Epoch"):
             tr_loss = 0
+            tot_cor = 0
             nb_tr_examples, nb_tr_steps = 0, 0
             pbar = tqdm(train_dataloader, desc="Iteration")
             for step, batch in enumerate(pbar):
@@ -1446,9 +1517,21 @@ def main():
                 else:
                     loss.backward()
 
+                preds = logits.cpu().detach()
+                if 'ag' in task_name and num_labels == 3:
+                    preds[:, 1] = -1e10    # Set logits for NEUTRAL to large negative so they never are argmax
+                if output_mode == "classification":
+                    sf = nn.functional.softmax(preds, dim=1)
+                    preds = np.argmax(preds, axis=1)
+                elif output_mode == "regression":
+                    preds = np.squeeze(preds)
+                result = compute_metrics(task_name, preds.numpy(), label_ids.cpu().detach().numpy())     # TODO
+                # correct, summary = analyse_results(preds, label_ids.numpy())
+
                 tr_loss += loss.item()
                 nb_tr_examples += input_ids.size(0)
                 nb_tr_steps += 1
+                tot_cor += result['acc']*input_ids.size(0)
 
                 # run eval loop
                 if args.do_eval and step % int(len(train_dataloader) * args.val_check_interval) == 0:
@@ -1456,6 +1539,7 @@ def main():
                         run_eval(args, task_name, snli_eval_features, label_list, tokenizer, output_mode, model, device, num_labels, global_step, tr_loss, nb_tr_steps, snli_processor, True)
 
                     run_eval(args, task_name, eval_features, label_list, tokenizer, output_mode, model, device, num_labels, global_step, tr_loss, nb_tr_steps, processor)
+                    model.train()
 
                 if (step + 1) % args.gradient_accumulation_steps == 0:
                     if args.fp16:
@@ -1468,11 +1552,13 @@ def main():
                     optimizer.zero_grad()
                     global_step += 1
 
-                pbar.set_description(f"loss: {loss:.3f} | global loss: {tr_loss/global_step:.3f}")
+                pbar.set_description(f"loss: {loss:.3f} | global loss: {tr_loss/global_step:.3f} | " + \
+                                    f"acc = {result['acc']:.3f} | cuml = {tot_cor/nb_tr_examples:.3f}")
                 pbar.update()
 
                 if args.logger == 'wandb':
-                    wandb.log({'loss': loss, 'global_loss': tr_loss/global_step, 'epoch': epoch})
+                    wandb.log({'loss': loss, 'global_loss': tr_loss/global_step, 'epoch': epoch,
+                                'train_acc': result['acc']})
                 
             pbar.close()
             total_loss += tr_loss
